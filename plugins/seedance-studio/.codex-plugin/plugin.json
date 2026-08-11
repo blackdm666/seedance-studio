@@ -1,7 +1,8 @@
 {
   "name": "seedance-studio",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "基于 88API 的 Seedance 2.5 视频工作室，支持一句话出片、视频提示词反推与可复刻工程包。",
+  "homepage": "https://88api.ai/",
   "author": {
     "name": "seedance-studio"
   },
@@ -13,7 +14,10 @@
     "longDescription": "通过 88API 集成 Seedance 2.5 与 Image-2，支持文生视频、图生视频、多模态参考与关键帧预审。一句话即可自动规划分镜、分段生成并拼接完整成片；也支持视频提示词反推和可复刻工程包。",
     "category": "Productivity",
     "capabilities": ["Write"],
+    "websiteURL": "https://88api.ai/",
     "brandColor": "#55A6A5",
+    "composerIcon": "./assets/composer-icon.png",
+    "logo": "./assets/plugin-logo.png",
     "defaultPrompt": "使用 $seedance-studio：把我的想法做成视频；或反推我给的视频的提示词。"
   }
 }

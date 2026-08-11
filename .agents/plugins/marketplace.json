@@ -1,7 +1,7 @@
 {
   "name": "seedance-studio-plugins",
   "interface": {
-    "displayName": "Seedance-Studio"
+    "displayName": "88API-Seedance-Studio"
   },
   "plugins": [
     {

@@ -1,4 +1,4 @@
-# Seedance-Studio
+# 88API-Seedance-Studio
 
 一句话出片的 Codex 集合插件：基于 [88api.ai](https://88api.ai/) 的 **Seedance 2.5 满血版**。
 
@@ -28,22 +28,46 @@
 - ffmpeg（反推与拼接需要）
 - 一个 88api.ai Key（`auto` 分组，或包含视频与生图模型分组）
 
-## 快速开始
+## 创建并配置 88API Key
 
-1. 安装插件（本仓库为标准 Codex 插件市场结构）。
-2. 配置 Key（只此一次）：
+### 1. 注册并登录
+
+打开 [88api.ai](https://88api.ai/) 注册账号并登录。
+
+### 2. 创建 API Key
+
+进入“API 密钥”页面，点击“创建 API 密钥”。名称可以自定义（例如 `Seedance Studio`），分组建议选择 `auto`（自动分组），以便同时调用 Seedance 视频模型和 Image-2 关键帧模型。如需在当前分组请求失败时继续尝试下一分组，可以开启“跨分组重试”。
+
+![创建 88API Key](docs/assets/88api-create-image-key.png)
+
+### 3. 复制 Key
+
+创建完成后，复制 Key 的完整内容。Key 只用于你自己的 Codex 配置，请勿粘贴到 Issue、公开聊天、仓库文件或截图中。
+
+![复制 88API Key](docs/assets/88api-copy-key.png)
+
+### 4. 配置并检查插件
+
+在仓库根目录运行：
 
 ```powershell
-node plugins/seedance-studio/scripts/studio.mjs --set-key "<你的88api Key>"
+node plugins/seedance-studio/scripts/studio.mjs --set-key "<YOUR_88API_KEY>"
+node plugins/seedance-studio/scripts/studio.mjs --get-config
 node plugins/seedance-studio/scripts/studio.mjs --self-test
 ```
 
+Key 会保存在本机 `~/.seedance-studio/config.json`，配置输出会自动隐藏完整 Key。`--self-test` 只检查接口与模型列表，不会发起付费生成任务。
+
+## 快速开始
+
+1. 安装插件（本仓库为标准 Codex 插件市场结构）。
+2. 按上方流程创建并配置 88API Key（只需一次）。
 3. 在 Codex 新任务里说人话：
 
 ```text
-@Seedance-Studio 做一个 45 秒的竖屏治愈短片：雨夜女孩把流浪猫带回家。
-@Seedance-Studio 反推这条视频的提示词：D:\videos\ref.mp4
-@Seedance-Studio 给我这条视频的复刻工程包，我想换成我自己的产品：D:\videos\hot.mp4
+@88API-Seedance-Studio 做一个 45 秒的竖屏治愈短片：雨夜女孩把流浪猫带回家。
+@88API-Seedance-Studio 反推这条视频的提示词：D:\videos\ref.mp4
+@88API-Seedance-Studio 给我这条视频的复刻工程包，我想换成我自己的产品：D:\videos\hot.mp4
 ```
 
 ## CLI 直接使用（可选）

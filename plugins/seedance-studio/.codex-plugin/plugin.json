@@ -1,0 +1,19 @@
+{
+  "name": "seedance-studio",
+  "version": "0.1.0",
+  "description": "一句话出片：基于 88api.ai 的 Seedance 2.5 满血版视频生成 + 关键帧预审 + 视频反推提示词的集合插件。",
+  "author": {
+    "name": "seedance-studio"
+  },
+  "repository": "",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Seedance-Studio",
+    "shortDescription": "一句话想法 → Seedance 2.5 成片；支持图生视频与反推提示词。",
+    "longDescription": "只需配置一个 88api.ai Key：文生视频、图生视频（本地图自动转 base64）、多模态参考（30图/10视频/10音频）、gpt-image-2 关键帧预审、ffmpeg 抽帧反推提示词、失败诊断与成本安全控制（dry-run、防重复提交、NO-RETRY 闸）。",
+    "category": "Productivity",
+    "capabilities": ["Write"],
+    "brandColor": "#55A6A5",
+    "defaultPrompt": "使用 $seedance-studio：把我的想法做成视频；或反推我给的视频的提示词。"
+  }
+}

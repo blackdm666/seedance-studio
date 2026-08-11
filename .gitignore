@@ -1,0 +1,7 @@
+seedance-out/
+seedance-projects/
+node_modules/
+*.log
+.DS_Store
+config.json
+*.mp4

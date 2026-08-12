@@ -19,6 +19,12 @@ For a simple 4–15s clip, compress it to:
 
 Do not force timestamps into a single simple action. Use them when the clip has multiple phases, dialogue beats, edits, or precise event timing.
 
+## Prefer one single-pass take (≤30s)
+
+Seedance 2.5 renders one continuous 4–30s take. For anything ≤30s, **default to a single take, not stitched segments**—one pass keeps pacing, transitions, lighting, and identity continuous, with no seam and lower cost. Only split when the clip exceeds 30s or genuinely needs a hard scene cut (then use pipeline.md).
+
+For an 8–30s take, write the **story arc first** (opening → progression → turning point → ending), then fill in shot/camera/light detail per beat. The arc, not a shot list, is what makes a longer single take read as one deliberate piece.
+
 ## Reference declaration
 
 Write what every asset controls and what it must not transfer:

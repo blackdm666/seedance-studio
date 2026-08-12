@@ -1,6 +1,6 @@
 # Multimodal reference control
 
-Load `capabilities.md` before quoting input ceilings.
+Check `api.md` before quoting input ceilings: ≤30 images, ≤10 videos, ≤10 audio, **≤50 combined**; single take 4–30s, fixed 720P. Video/audio references must be public HTTP(S) URLs; local images can be base64 Data URLs.
 
 ## Assign one authority per dimension
 
@@ -57,7 +57,7 @@ State which characters may touch or cross. For crowded action, split the scene o
 
 ### Multi-panel storyboard
 
-The storyboard owns composition, shot order, framing, and action placement—not finished identity or rendering unless explicitly assigned. Use `white-model-storyboard.md` for the full workflow.
+The storyboard owns composition, shot order, framing, and action placement—not finished identity or rendering unless explicitly assigned. Feed the panel as an `image_url` reference and declare in the prompt that it controls layout/shot order only, not identity, text, or final look.
 
 ## Rights and leakage check
 

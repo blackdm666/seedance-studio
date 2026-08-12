@@ -1,7 +1,7 @@
 {
   "name": "seedance-studio",
-  "version": "0.3.0",
-  "description": "基于 88API 的 Seedance 2.5 视频工作室，自动按规模分级：一句话出片、AI 短剧/剧集/电影前期制片、视频提示词反推与可复刻工程包。",
+  "version": "0.4.0",
+  "description": "基于 88API 的 Seedance 2.5 短片工作室：一句话生成单条短片与 TVC/广告片（文生/图生、多镜拆段拼接），外加视频提示词反推与可复刻工程包。专注单条成片，不做多集连续剧。",
   "homepage": "https://88api.ai/",
   "author": {
     "name": "seedance-studio"
@@ -10,14 +10,14 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "88API-Seedance-Studio",
-    "shortDescription": "Seedance 2.5 视频模型，自动分级：单镜短片到 AI 短剧/电影，支持文生/图生视频、提示词反推与长片拼接。",
-    "longDescription": "通过 88API 集成 Seedance 2.5 与 Image-2，支持文生视频、图生视频、多模态参考与关键帧预审。启动时自动按规模分级：T0 单镜直接出片、T1 短片拆段拼接、T2 大项目（短剧/剧集/电影）走前期制片管线——剧本审核 → 导演分镜头脚本 → 角色/场景/道具设定图（一致性地基）→ 逐镜锚定图串接保证跨集同一张脸 → 连续性追踪 → 分集交付；也支持视频提示词反推和可复刻工程包。",
+    "shortDescription": "Seedance 2.5 短片工作室：单镜直出到多镜短片/TVC，支持文生/图生视频、提示词反推与拼接（专注单条成片，不做连续剧）。",
+    "longDescription": "通过 88API 集成 Seedance 2.5 与 Image-2，支持文生视频、图生视频、多模态参考与关键帧预审。启动时自动按规模分级：T0 单镜直接出片（含 15–30 秒 TVC）、T1 多镜短片拆段生成再 ffmpeg 拼接成一条连续成片（短片 / 长 TVC / 宣传片）；也支持视频提示词反推和可复刻工程包。专注单条短片与广告片，不做多集连续短剧/剧集/电影。",
     "category": "Productivity",
     "capabilities": ["Write"],
     "websiteURL": "https://88api.ai/",
     "brandColor": "#55A6A5",
     "composerIcon": "./assets/composer-icon.png",
     "logo": "./assets/plugin-logo.png",
-    "defaultPrompt": "使用 $seedance-studio：把我的想法做成视频或短剧；或反推我给的视频的提示词。"
+    "defaultPrompt": "使用 $seedance-studio：把我的想法做成一条短片或 TVC；或反推我给的视频的提示词。"
   }
 }

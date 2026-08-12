@@ -8,9 +8,11 @@
 
 | 工作流 | 输入 | Codex 自动完成 | 产出 |
 |---|---|---|---|
-| **① 想法 → 成片** | 一句话想法 | 规划分镜 → 生成锚定图/关键帧 → 分段生成（每段 4–30s）→ ffmpeg 拼接 | 完整 MP4 成片 |
+| **① 想法 → 成片** | 一句话想法 | **自动按规模分级**：T0 单镜直接出 · T1 短片拆段拼接 · T2 大项目（短剧/剧集/电影）走前期制片管线（剧本审核 → 分镜头脚本 → 角色/场景/道具设定图 → 逐镜锚定图串接保证跨集同一张脸 → 连续性追踪 → 分集拼接） | 单条 MP4，或多集短剧/电影 |
 | **② 视频 → 反推** | 一条参考视频 | ffmpeg 抽帧 → 逐帧证据观察 → 结构化还原运镜/动作/文字/声音 | 可直接生成的提示词 |
 | **③ 视频 → 复刻工程包** | 一条参考视频 | ②的全部 + 素材盘点 + 合规新身份锚定图 + 逐段绑定提示词 | 补齐素材即可一键生成的完整工程 |
+
+> **① 自动分级只有 T2（大项目）会先跟你确认集数与总计费秒数**，T0/T1 一句话直接开工——既保住"一句话出片"，又不让你在不知情下烧掉一部剧的钱。做 AI 短剧/电影的卡点从来不是模型不行，而是缺"前期制片"这一层：剧本、分镜、角色资产库、跨集一致性——这些正是 T2 补上的。
 
 > 功能③是对"光有提示词还不够"的回答：好视频 = 提示词 × 素材绑定 × 时间结构。工程包内含素材职责表与**缺失素材清单**（原片每种产品形态各需一张干净图），补齐后直接进入①的生成阶段。
 
@@ -90,6 +92,7 @@ node plugins/seedance-studio/scripts/studio.mjs concat --dir seedance-projects/d
 ## 鸣谢与来源
 
 - 提示词方法论 references 改编自 [allenGKC/Seedance-2.5](https://github.com/allenGKC/Seedance-2.5)（MIT，见 THIRD-PARTY-LICENSE-seedance25os.txt）。
+- 大项目剧本审核铁律（`screenwriting.md`）改编自 [Vi7QY/screenwriter-skill](https://github.com/Vi7QY/screenwriter-skill)（MIT）；剧本→分镜拆解思路参考 [neopen/story-shot-agent](https://github.com/neopen/story-shot-agent)（MIT）；T2 前期制片全流程架构思路参考 [ArcReel/ArcReel](https://github.com/ArcReel/ArcReel)（AGPL-3.0，仅借鉴思路，未取用其代码或文本）。各来源署名见 THIRD-PARTY-NOTICES.md。
 - 反推与复刻方法论参考社区证据优先实践（fkyhdd、daihuo-fanpai 等项目的公开经验），正文为本项目重写。
 - 插件结构参考 [blackdm666/88API-image-gen](https://github.com/blackdm666/88API-image-gen)；接口规格来自 88api.ai 官方文档。
 

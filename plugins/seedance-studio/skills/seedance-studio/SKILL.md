@@ -1,6 +1,6 @@
 ---
 name: seedance-studio
-description: 三大工作流的一站式视频工作室（基于 88api.ai 的 Seedance 2.5 满血版 + gpt-image-2）：①一个想法 → 完整成片（自动规划分镜、生成锚定图与关键帧、分段生成 4–30 秒片段、ffmpeg 拼接交付）；②一个视频 → 证据优先的反推提示词；③一个视频 → 可复刻工程包（结构化分镜、素材需求清单、合规新身份锚定图、逐段绑定提示词）。用户提到出片、生视频、做短片、图生视频、反推提示词、复刻这条视频、仿拍、素材包、Seedance、即梦视频，或"把这个想法做成视频"时使用。不用于纯图片任务或非 Seedance 模型咨询。
+description: 三大工作流的一站式视频工作室（基于 88api.ai 的 Seedance 2.5 满血版 + gpt-image-2）：①一个想法 → 完整成片，自动按规模分级——单镜/短片（规划分镜、生成锚定图与关键帧、分段生成 4–30 秒、ffmpeg 拼接）或大项目短剧/剧集/电影（剧本审核 → 导演分镜头脚本 → 角色/场景/道具设定图 → 逐镜锚定图串接保证跨集同一张脸 → 连续性追踪 → 分集交付）；②一个视频 → 证据优先的反推提示词；③一个视频 → 可复刻工程包（结构化分镜、素材需求清单、合规新身份锚定图、逐段绑定提示词）。用户提到出片、生视频、做短片、AI 短剧、连续剧、剧集、AI 电影、分镜头脚本、角色设定、图生视频、反推提示词、复刻这条视频、仿拍、素材包、Seedance、即梦视频，或"把这个想法做成视频/短剧"时使用。不用于纯图片任务或非 Seedance 模型咨询。
 ---
 
 # Seedance Studio
@@ -34,12 +34,25 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" <参数>
 └── final/            # final.mp4 + 交付说明
 ```
 
+## 意图分级（启动前先判断规模，自动分级，别审问用户）
+
+从用户一句话里**自动判断规模**，只有大项目档才强制确认，其余直接开工——这是本插件"一句话出片"的底线：
+
+| 档 | 触发信号 | 是否先确认 | 走向 |
+|---|---|---|---|
+| **T0 直接出片** | 单一画面/动作、≤30 秒、无剧情分场 | 不确认，直接出 | 下方"快速出片" |
+| **T1 短片** | 多镜头、30 秒–几分钟、有起承转合 | 只确认 1 次拆段+总秒数 | [references/pipeline.md](references/pipeline.md) |
+| **T2 大项目** | 出现"短剧/剧集/连续剧/EP/第几集/电影/系列/角色设定/分镜头脚本"，或明显需要跨集同一角色 | **强制先立项**（集数·时长·总计费秒数·先试拍第1集），确认后全自动 | [references/production.md](references/production.md) |
+
+判不准就按"会实质改变结果"的原则问 1 句（附默认值）。T2 一定是多镜头×多秒数=真金白银，**未确认预算不得进入生成**。
+
 ## 意图路由
 
 | 用户意图 | 工作流 | 加载 |
 |---|---|---|
-| 功能一：想法 → 成片（≤30 秒单段，默认） | 下方"快速出片" | [references/prompting.md](references/prompting.md) |
-| 功能一：想法 → 完整成片（>30 秒 / 多场景） | 完整成片管线 | [references/pipeline.md](references/pipeline.md)、[references/long-video.md](references/long-video.md) |
+| 功能一（T0）：想法 → 成片（≤30 秒单段，默认） | 下方"快速出片" | [references/prompting.md](references/prompting.md) |
+| 功能一（T1）：想法 → 完整成片（>30 秒 / 多场景） | 完整成片管线 | [references/pipeline.md](references/pipeline.md)、[references/long-video.md](references/long-video.md) |
+| 功能一（T2）：想法 → 短剧/剧集/电影（多集/跨集一致） | 大项目前期制片管线 | [references/production.md](references/production.md)、[references/screenwriting.md](references/screenwriting.md) |
 | 图生视频 / 多模态参考 | 快速出片 + `--image` | [references/references.md](references/references.md) |
 | 功能二：视频 → 反推提示词 | 反推流程 | [references/reverse.md](references/reverse.md) |
 | 功能三：视频 → 可复刻工程包 | 复刻工程包流程 | [references/replicate.md](references/replicate.md)（内部先走 reverse.md） |
@@ -64,6 +77,10 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" video --prompt "<提示词>" --duration 
 
 超过 30 秒或多场景需求：切换到 [references/pipeline.md](references/pipeline.md) 的完整管线（规划 → 锚定图 → 分段生成 → `concat` 拼接）。
 
+## 功能一（T2）：大项目——短剧 / 剧集 / 电影
+
+出现"短剧/剧集/连续剧/电影/系列/角色设定/分镜头脚本"意图，或需要**跨集同一个角色**时，加载 [references/production.md](references/production.md) 的前期制片管线：**先立项确认预算（唯一强制打扰）→ 剧本审核（[references/screenwriting.md](references/screenwriting.md) 铁律：无聊是最大的罪、第一集决定生死）→ 导演分镜头脚本 → 用 gpt-image-2 生成角色/场景/道具设定图（一致性地基）→ 逐镜把锚定图当 `--image` 参考串接（保证同一张脸）→ 连续性追踪 → 分集拼接交付**。核心认知：大项目卡点不是模型不行，而是缺"前期制片"这一层；生图在这里从"可选预审"升级为跨集一致性的地基。**务必先只做第 1 集验证风格与角色一致，用户满意再批量续做。**
+
 ## 功能二：反推提示词
 
 加载 [references/reverse.md](references/reverse.md) 执行：ffprobe 元数据 → ffmpeg 联系表 + 密集帧 → **亲眼逐帧观察**（证据优先，禁止臆测）→ 固定格式输出提示词。产出的 shotlist 与提示词可直接转入功能三（补素材）或功能一（直接生成）。向用户说明：好视频光有提示词不够——需要素材绑定时主动推荐功能三。
@@ -87,4 +104,4 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" video --prompt "<提示词>" --duration 
 
 ## 输出契约
 
-每次交付按序报告：① 实际配置；② 成片/工程包绝对路径；③ 用量（多段累加 `usage.seconds`）；④ 仅在能预防下次翻车时给一条建议。不展示内部流程名，不给新手多个竞争方案。
+每次交付按序报告：① 实际配置；② 成片/工程包绝对路径；③ 用量（多段累加 `usage.seconds`）；④ **提示词所在位置**——告知 `prompts/segNN.txt`（或 T2 的 `epNN/prompts/`）路径，说明"真实提示词已逐字存档于此，需要可自行打开查看"，默认不在对话里粘贴全文，用户要看再贴；⑤ 仅在能预防下次翻车时给一条建议。不展示内部流程名，不给新手多个竞争方案。

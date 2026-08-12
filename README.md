@@ -56,9 +56,10 @@
 node plugins/seedance-studio/scripts/studio.mjs --set-key "<YOUR_88API_KEY>"
 node plugins/seedance-studio/scripts/studio.mjs --get-config
 node plugins/seedance-studio/scripts/studio.mjs --self-test
+node plugins/seedance-studio/scripts/studio.mjs --caps
 ```
 
-Key 会保存在本机 `~/.seedance-studio/config.json`，配置输出会自动隐藏完整 Key。`--self-test` 只检查接口与模型列表，不会发起付费生成任务。
+Key 会保存在本机 `~/.seedance-studio/config.json`，配置输出会自动隐藏完整 Key。`--self-test` 只检查接口与模型列表（并打印 Seedance 2.5 能力边界），不会发起付费生成任务；`--caps` 免 Key 离线查看能力边界（时长 4–30 秒 / 720P / 图 30·视频 10·音频 10 参考）。
 
 ## 快速开始
 

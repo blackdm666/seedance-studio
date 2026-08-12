@@ -20,6 +20,16 @@ const DEFAULTS = {
 const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
 const MIME = { ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".webp":"image/webp", ".gif":"image/gif" };
+const CAPS = [
+  "Seedance 2.5 能力边界（88api，插件已按此硬校验）：",
+  "  • 时长 4–30 秒（整数，按秒计费）",
+  "  • 分辨率固定 720P（填更高不生效）",
+  "  • 画幅 ratio: auto / 21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16",
+  "  • 图片参考 ≤30 张（本地图自动转 base64，无需公网 URL）",
+  "  • 视频参考 ≤10 个（必须公网直连 http(s) URL）",
+  "  • 音频参考 ≤10 个（必须公网直连 http(s) URL）",
+  "  • 同步音频 generate_audio 默认开；seed 可控（-1 随机）",
+];
 
 function loadConfig() {
   let c = {};
@@ -276,8 +286,10 @@ async function cmdSelfTest(cfg) {
     const vid = ids.filter(x => /seedance/i.test(x));
     const img = ids.filter(x => /image/i.test(x));
     log("视频模型: " + (vid.join(", ") || "(未见 seedance —— 确认 Key 分组包含视频模型)"));
-    log("生图模型: " + (img.slice(0, 5).join(", ") || "(未见 image 模型)"));
+    log("生图模型: " + (img.join(", ") || "(未见 image 模型)"));
     log("[OK] Key 可用。self-test 不调用付费生成接口。");
+    log("");
+    for (const l of CAPS) log(l);
   } catch (e) { die("self-test 失败: " + e.message); }
 }
 // ---------- main ----------
@@ -289,6 +301,7 @@ const cfg = loadConfig();
   if (args["set-base-url"]) { cfg.baseUrl = String(args["set-base-url"]).replace(/\/$/, ""); saveConfig({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl }); log("baseUrl = " + cfg.baseUrl); return; }
   if (args["config-path"]) { log(CONFIG_PATH); return; }
   if (args["get-config"]) { log(JSON.stringify({ configPath: CONFIG_PATH, baseUrl: cfg.baseUrl, apiKey: mask(cfg.apiKey), videoModel: cfg.videoModel, imageModel: cfg.imageModel }, null, 2)); return; }
+  if (args["caps"] || args["capabilities"]) { for (const l of CAPS) log(l); return; }
   if (args["self-test"]) return cmdSelfTest(cfg);
   const cmd = args._[0];
   if (cmd === "video") return cmdVideo(cfg, args);
@@ -296,7 +309,7 @@ const cfg = loadConfig();
   if (cmd === "status") return cmdStatus(cfg, args);
   if (cmd === "concat") return cmdConcat(cfg, args);
   log(["seedance-studio CLI — 用法:",
-    '  配置:  node studio.mjs --set-key "sk-..."   |  --get-config  |  --self-test',
+    '  配置:  node studio.mjs --set-key "sk-..."   |  --get-config  |  --self-test  |  --caps',
     '  生视频: node studio.mjs video --prompt "..." [--duration 4-30] [--ratio 16:9]',
     "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",

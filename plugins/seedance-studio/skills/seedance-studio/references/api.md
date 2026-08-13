@@ -17,14 +17,16 @@
 
 | 别名 | 模型 id | 端点/返回 | 输出实测 | 用途 |
 |---|---|---|---|---|
-| `2k`（默认） | `gpt-image-2` | generations / b64 或 url | 2K（2048 档） | 关键帧、方向预审（快·省） |
-| `4k` | `gpt-image-2-4k` | generations / **url**（Adobe Firefly S3） | 请求 4096²→实际约 **2880²**（方图上限，长边可更高） | 高清主图 / 海报 / 产品图 |
-| `gemini` | `gemini-3-pro-image` | generations / **b64** | 约 **2048² 原生**（忽略 size 请求值） | 参考图一致性最强，垫图 / 锁角色 / 锁产品 |
+| `4k`（**默认**） | `gpt-image-2-4k` | generations / **url**（Adobe Firefly S3） | **16:9=3840×2160 真 4K UHD**；方图约 2880² | 高清主图 / 海报 / 产品图（默认档） |
+| `gemini`（pro） | `gemini-3-pro-image` | generations / **b64** | 约 **2048² 原生**（忽略 size 请求值） | 参考图一致性最强；垫图 / 锁角色 / 锁产品；**兜底 & 不满意时切它** |
+| `2k` | `gpt-image-2` | generations / b64 或 url | 2K（2048 档） | 便宜预审 / 关键帧草图 |
 
-- 命令：`node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 2k|4k|gemini] [--ref 参考图 ...]`
+- 命令：`node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini|2k] [--ref 参考图 ...] [--no-fallback]`
+- **默认 `gpt-image-2-4k`**（16:9 出真 4K UHD）。**自动兜底**：默认档不可用/失败（如上游 503 No available channel）时，插件自动切换 pro 模型 `gemini-3-pro-image` 重试一次；`--no-fallback` 可关闭。
+- **不满意画面内容或参考还原度**：手动 `--model gemini` 用 pro 模型重试（一致性更强）——每次成功后 CLI 也会提示这一点。
 - **参考图生图（img2img / 垫图）**：任意个 `--ref <本地图>` → 自动走 `POST /v1/images/edits`（multipart，字段 `image` 可多次）。实测：喂一张产品/角色图 + 提示词，能保留主体形态换场景/换光——**功能三保「产品外观/人物身份一致」的首选**。三款模型都可接 `--ref`，一致性以 `gemini-3-pro-image` 最强。
-- 尺寸：`gpt-image-2-4k` 用 4K 尺寸表（2K 档 ×2）；`gemini-3-pro-image` 忽略 size、按原生比例出图；size 仍随 `--aspect` 传入（对 4k 有效、对 gemini 仅作提示）。
-- 计费按 token（`usage.output_tokens` 的 image_tokens）；4k / gemini 单张明显贵于 2K 默认档——**批量出锚定图前先 1 张试方向**。
+- 尺寸：`gpt-image-2-4k` 用 4K 尺寸表（2K 档 ×2，16:9→4096×2304 请求、实出 3840×2160）；`gemini-3-pro-image` 忽略 size、按原生比例出图。
+- 计费按 token（`usage.output_tokens` 的 image_tokens）；4k / gemini 单张明显贵于 2K——**批量出锚定图前先 1 张试方向**。
 
 ## 视频能力边界
 

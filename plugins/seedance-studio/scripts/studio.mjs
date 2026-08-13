@@ -16,7 +16,7 @@ const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const DEFAULTS = {
   baseUrl: "https://88api.ai",
   videoModel: "seedance2.5满血版",
-  imageModel: "gpt-image-2",
+  imageModel: "gpt-image-2-4k",
   pollIntervalMs: 12000,
   pollTimeoutMs: 25 * 60 * 1000,
 };
@@ -25,7 +25,7 @@ const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3
 // 生图模型预设（均走 88api /v1/images 系列端点，实测 2026-08）
 const IMG_MODELS = {
   "gpt-image-2":        { id: "gpt-image-2",        scale: "2k",     note: "2K 关键帧/锚定图（默认·快·省）" },
-  "gpt-image-2-4k":     { id: "gpt-image-2-4k",     scale: "4k",     note: "高清主图/海报（方图实测上限约 2880²，返回 URL）" },
+  "gpt-image-2-4k":     { id: "gpt-image-2-4k",     scale: "4k",     note: "高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL）" },
   "gemini-3-pro-image": { id: "gemini-3-pro-image", scale: "native", note: "Gemini 3 Pro Image（约 2048² 原生；参考图一致性最强，垫图/锁角色首选，返回 b64）" },
 };
 // 友好别名 → 预设键
@@ -34,8 +34,9 @@ const IMG_ALIASES = {
   "4k":"gpt-image-2-4k","gpt-4k":"gpt-image-2-4k","gpt-image-2-4k":"gpt-image-2-4k",
   "gemini":"gemini-3-pro-image","gemini-pro":"gemini-3-pro-image","pro":"gemini-3-pro-image","gemini-3-pro-image":"gemini-3-pro-image",
 };
+const IMG_FALLBACK = "gemini-3-pro-image"; // 主模型不可用/失败时自动切换的 pro 模型
 function resolveImgModel(name) {
-  if (!name) return IMG_MODELS["gpt-image-2"];
+  if (!name) return IMG_MODELS["gpt-image-2-4k"];
   const key = IMG_ALIASES[String(name).toLowerCase()];
   if (key) return IMG_MODELS[key];
   return { id: String(name), scale: "2k", note: "(自定义模型 id，按 2K 尺寸表提交)" };
@@ -71,9 +72,11 @@ const CAPS = [
   "硬约束（插件已前置校验）：",
   "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
   "生图（关键帧/锚定图，88api /v1/images，2026-08 实测）：",
-  "  • gpt-image-2（默认·2K）：快而省，做关键帧/预审用 `--model 2k`",
-  "  • gpt-image-2-4k：高清主图/海报，`--model 4k`（方图实测上限约 2880²）",
-  "  • gemini-3-pro-image：`--model gemini`，约 2048² 原生，参考图一致性最强",
+  "  • 默认 gpt-image-2-4k（`--model 4k`）：16:9 实测出真 4K UHD 3840×2160；方图约 2880²（返回 URL）",
+  "  • gemini-3-pro-image（`--model gemini`，pro 模型）：约 2048² 原生，参考图一致性最强（返回 b64）",
+  "  • gpt-image-2（`--model 2k`）：2K 快省档，做便宜预审",
+  "  • 自动兜底：默认 4k 不可用/失败时，自动切换 pro 模型 gemini-3-pro-image 重试一次（`--no-fallback` 关闭）",
+  "  • 不满意画面/参考还原：手动 `--model gemini` 用 pro 模型重试（一致性更强）",
   "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]` 走 /v1/images/edits——功能三保产品/人物一致性首选",
 ];
 
@@ -289,31 +292,12 @@ async function cmdRaw(cfg, args) {
   await pollTask(cfg, taskId, dir);
 }
 // ---------- image (keyframes) ----------
-async function cmdImage(cfg, args) {
-  if (!args.prompt) die("需要 --prompt");
-  const aspect = String(args.aspect || "16:9");
-  const model = resolveImgModel(args.model);
-  const size = imgSize(aspect, model.scale);
-  if (!size) die("aspect 仅支持: " + Object.keys(IMG_ASPECTS).join(", "));
-  const n = args.n ? parseInt(args.n, 10) : 1;
-  if (!(n >= 1 && n <= 4)) die("--n 限 1–4");
-  // 参考图（垫图/锁角色/锁产品）：任意个 --ref，走 /v1/images/edits
-  const refs = [].concat(args.ref || []).filter(Boolean).map(String);
-  const dir = outDir(args);
-
-  if (args["dry-run"]) {
-    log("[DRY-RUN] " + (refs.length ? "POST " + cfg.baseUrl + "/v1/images/edits (multipart)" : "POST " + cfg.baseUrl + "/v1/images/generations"));
-    log(JSON.stringify({ model: model.id, note: model.note, prompt: String(args.prompt), n, size, refs }, null, 2));
-    return;
-  }
-
-  let items;
+// 单次生图请求（文生图 或 参考图 edits），返回 data[] 数组；失败/无输出抛错供上层回退
+async function requestImages(cfg, modelId, prompt, n, size, refs) {
   if (refs.length) {
-    for (const r of refs) if (!existsSync(resolve(r))) die("参考图不存在: " + r);
-    log("[submit] 参考图生图 " + n + " 张 (" + model.id + ") ←垫图 " + refs.length + " 张");
     const fd = new FormData();
-    fd.append("model", model.id);
-    fd.append("prompt", String(args.prompt));
+    fd.append("model", modelId);
+    fd.append("prompt", prompt);
     fd.append("n", String(n));
     fd.append("size", size);
     for (const r of refs) {
@@ -326,13 +310,49 @@ async function cmdImage(cfg, args) {
     const res = await fetch(cfg.baseUrl + "/v1/images/edits", { method: "POST", headers: { Authorization: "Bearer " + requireKey(cfg) }, body: fd });
     const text = await res.text();
     let json; try { json = JSON.parse(text); } catch { json = { raw: text.slice(0, 500) }; }
-    if (!res.ok) die("参考图生图失败 HTTP " + res.status + ": " + ((json.error && json.error.message) || text.slice(0, 300)));
-    items = json.data || [];
-  } else {
-    const payload = { model: model.id, prompt: String(args.prompt), n, size };
-    log("[submit] 生图 " + n + " 张 " + size + " (" + model.id + ")");
-    const res = await api(cfg, "POST", "/v1/images/generations", payload);
-    items = res.data || [];
+    if (!res.ok) throw new Error("HTTP " + res.status + ": " + ((json.error && json.error.message) || text.slice(0, 200)));
+    const items = json.data || [];
+    if (!items.length) throw new Error("无图片数据");
+    return items;
+  }
+  const res = await api(cfg, "POST", "/v1/images/generations", { model: modelId, prompt, n, size });
+  const items = res.data || [];
+  if (!items.length) throw new Error("无图片数据");
+  return items;
+}
+async function cmdImage(cfg, args) {
+  if (!args.prompt) die("需要 --prompt");
+  const prompt = String(args.prompt);
+  const aspect = String(args.aspect || "16:9");
+  const primary = resolveImgModel(args.model);
+  if (!imgSize(aspect, primary.scale)) die("aspect 仅支持: " + Object.keys(IMG_ASPECTS).join(", "));
+  const n = args.n ? parseInt(args.n, 10) : 1;
+  if (!(n >= 1 && n <= 4)) die("--n 限 1–4");
+  // 参考图（垫图/锁角色/锁产品）：任意个 --ref，走 /v1/images/edits
+  const refs = [].concat(args.ref || []).filter(Boolean).map(String);
+  for (const r of refs) if (!existsSync(resolve(r))) die("参考图不存在: " + r);
+  const dir = outDir(args);
+  const noFallback = !!args["no-fallback"];
+
+  if (args["dry-run"]) {
+    log("[DRY-RUN] " + (refs.length ? "POST " + cfg.baseUrl + "/v1/images/edits (multipart)" : "POST " + cfg.baseUrl + "/v1/images/generations"));
+    log(JSON.stringify({ model: primary.id, note: primary.note, prompt, n, size: imgSize(aspect, primary.scale), refs, fallback: (!noFallback && primary.id !== IMG_FALLBACK) ? IMG_FALLBACK : null }, null, 2));
+    return;
+  }
+
+  let used = primary;
+  let items;
+  const label = refs.length ? "参考图生图 " + n + " 张 ←垫图 " + refs.length + " 张" : "生图 " + n + " 张 " + imgSize(aspect, primary.scale);
+  log("[submit] " + label + " (" + primary.id + ")");
+  try {
+    items = await requestImages(cfg, primary.id, prompt, n, imgSize(aspect, primary.scale), refs);
+  } catch (e) {
+    // 主模型不可用/失败 → 自动切换 pro 模型（gemini-3-pro-image）重试一次
+    if (noFallback || primary.id === IMG_FALLBACK) die("生图失败（" + primary.id + "）: " + e.message);
+    used = IMG_MODELS[IMG_FALLBACK] || resolveImgModel(IMG_FALLBACK);
+    log("[fallback] " + primary.id + " 不可用/失败（" + e.message + "）→ 切换 pro 模型 " + used.id + " 重试…");
+    try { items = await requestImages(cfg, used.id, prompt, n, imgSize(aspect, used.scale), refs); }
+    catch (e2) { die("主模型与 pro 模型均失败：\n  " + primary.id + " → " + e.message + "\n  " + used.id + " → " + e2.message + "\n检查提示词/参考图/Key 分组。"); }
   }
 
   let i = 0;
@@ -344,7 +364,8 @@ async function cmdImage(cfg, args) {
     i++;
     log("[DONE] 图片已保存: " + dest);
   }
-  if (!i) die("响应中没有图片数据（模型 " + model.id + "）");
+  if (!i) die("响应中没有图片数据（模型 " + used.id + "）");
+  if (used.id !== IMG_FALLBACK) log("[提示] 对画面/参考还原不满意？加 --model gemini（" + IMG_FALLBACK + "，pro 模型，一致性更强）重试。");
 }
 // ---------- concat (ffmpeg) ----------
 function cmdConcat(cfg, args) {
@@ -511,8 +532,8 @@ const cfg = loadConfig();
     "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
-    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 2k|4k|gemini] [--ref 参考图 ...] [--dry-run]',
-    "          模型: 2k=gpt-image-2(默认) · 4k=gpt-image-2-4k(高清主图) · gemini=gemini-3-pro-image(参考图一致性最强)",
+    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini|2k] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
+    "          默认 4k=gpt-image-2-4k(16:9 出真 4K UHD)；不可用/失败自动切 pro 模型 gemini-3-pro-image；不满意画面/参考可 --model gemini 重试",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  深度图: node studio.mjs depth --video <片> [--fps 4] [--colormap all|gray|magma|turbo] [--out 目录]",
     "          反推辅助：真深度(Depth-Anything V2)出灰度/熔岩/光谱深度视频，读人物动作与前后景；无 torch 时自动回退 ffmpeg 运动pass"].join("\n"));

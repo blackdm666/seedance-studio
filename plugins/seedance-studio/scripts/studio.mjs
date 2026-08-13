@@ -425,67 +425,100 @@ async function cmdDepth(cfg, args) {
   if (!existsSync(src)) die("视频不存在: " + src);
   const fps = args.fps ? parseFloat(args.fps) : 4;
   const cmap = String(args.colormap || "all"); // all|gray|magma|turbo
+  // 题材自适应：character(人物/产品·深度为主) | landscape(风景/大场面·运动+原帧为主，跳过深度) | auto(两种pass都出，Claude自己挑)
+  let mode = String(args.mode || "auto").toLowerCase();
+  if (mode === "product" || mode === "person" || mode === "model") mode = "character";
+  if (mode === "scenery" || mode === "scene" || mode === "landscape") mode = "landscape";
+  if (!["auto", "character", "landscape"].includes(mode)) mode = "auto";
+  // landscape：运镜靠视差+原帧光色，单目深度对天空/云海/水面/雾失效——默认跳过深度（--with-depth 可强开）
+  const skipDepth = mode === "landscape" && !args["with-depth"];
   const dir = outDir(args);
   const framesDir = join(dir, "frames"); mkdirSync(framesDir, { recursive: true });
   const depthDir = join(dir, "depth"); mkdirSync(depthDir, { recursive: true });
 
+  const modeNote = { character: "深度为主（人物/产品有硬几何）", landscape: "运动+原帧为主，跳过深度（风景/大场面）", auto: "深度+运动都出，读帧自己挑" }[mode];
+  log("[depth] 题材模式: " + mode + " —— " + modeNote);
   log("[depth] 抽帧 @ " + fps + "fps → " + framesDir);
   ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vf", "fps=" + fps, join(framesDir, "f%05d.png")], "抽帧");
   const frameFiles = readdirSync(framesDir).filter(f => f.endsWith(".png")).sort();
   if (!frameFiles.length) die("抽帧失败，未得到任何帧");
   log("[depth] 得到 " + frameFiles.length + " 帧");
 
-  const py = detectPython(args);
-  let realDepth = false;
-  if (py) {
-    const chk = spawnSync(py, ["-c", "import transformers,timm,PIL,torch"], { encoding: "utf8" });
-    if (chk.status === 0) realDepth = true;
-    else log('[depth] 找到 Python 但缺依赖，将回退 ffmpeg 运动pass。装真深度: "' + py + '" -m pip install transformers timm pillow torch');
-  } else {
-    log("[depth] 未找到 Python，回退 ffmpeg 运动pass（安装 Python + torch 后可用真深度）。");
-  }
-
   const outputs = [];
-  if (realDepth) {
-    const worker = join(SCRIPT_DIR, "depth_video.py");
-    const model = args.model ? String(args.model) : "depth-anything/Depth-Anything-V2-Small-hf";
-    log("[depth] 运行 Depth-Anything V2（CPU，约 0.6s/帧，首次含下载）…");
-    const r = spawnSync(py, [worker, framesDir, depthDir, model], { stdio: "inherit" });
-    const depthFiles = existsSync(depthDir) ? readdirSync(depthDir).filter(f => f.endsWith(".png")) : [];
-    if (r.status !== 0 || !depthFiles.length) { log("[depth] 深度worker失败，回退 ffmpeg 运动pass。"); realDepth = false; }
+
+  // ---------- 真深度 pass（character / auto；landscape 默认跳过）----------
+  let realDepth = false;
+  if (!skipDepth) {
+    const py = detectPython(args);
+    if (py) {
+      const chk = spawnSync(py, ["-c", "import transformers,timm,PIL,torch"], { encoding: "utf8" });
+      if (chk.status === 0) realDepth = true;
+      else log('[depth] 找到 Python 但缺依赖，跳过真深度（仅出运动pass）。装真深度: "' + py + '" -m pip install transformers timm pillow torch');
+    } else {
+      log("[depth] 未找到 Python，跳过真深度（仅出运动pass；装 Python + torch 后可用）。");
+    }
+    if (realDepth) {
+      const worker = join(SCRIPT_DIR, "depth_video.py");
+      const model = args.model ? String(args.model) : "depth-anything/Depth-Anything-V2-Small-hf";
+      log("[depth] 运行 Depth-Anything V2（CPU，约 0.6s/帧，首次含下载）…");
+      const r = spawnSync(py, [worker, framesDir, depthDir, model], { stdio: "inherit" });
+      const depthFiles = existsSync(depthDir) ? readdirSync(depthDir).filter(f => f.endsWith(".png")) : [];
+      if (r.status !== 0 || !depthFiles.length) { log("[depth] 深度worker失败，仅出运动pass。"); realDepth = false; }
+    }
+    if (realDepth) {
+      const mk = (name, extra) => {
+        const o = join(dir, "depth_" + name + ".mp4");
+        ffRun(["-y", "-hide_banner", "-loglevel", "error", "-framerate", String(fps), "-i", join(depthDir, "f%05d.png"),
+          "-vf", "format=gray,normalize" + (extra ? "," + extra : "") + ",format=yuv420p", "-r", String(fps), o], name);
+        outputs.push(o);
+      };
+      if (cmap === "all" || cmap === "gray") mk("gray", "");
+      if (cmap === "all" || cmap === "magma") mk("magma", "pseudocolor=preset=magma");
+      if (cmap === "all" || cmap === "turbo" || cmap === "spectral") mk("spectral", "pseudocolor=preset=turbo");
+      // 四格样张（原帧 | 灰度 | 熔岩 | 光谱），供直观确认与展示
+      const mid = frameFiles[Math.floor(frameFiles.length / 2)];
+      const montage = join(dir, "depth_montage.png");
+      ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", join(framesDir, mid), "-i", join(depthDir, mid),
+        "-filter_complex",
+        "[1]format=gray,normalize,split=3[g0][g1][g2];[g0]scale=360:-1[b];[g1]pseudocolor=preset=magma,scale=360:-1[c];[g2]pseudocolor=preset=turbo,scale=360:-1[d];[0]scale=360:-1[a];[a][b][c][d]hstack=inputs=4",
+        montage], "montage");
+      outputs.push(montage);
+      log("[depth] ✅ 真深度完成（Depth-Anything V2）");
+    }
+  } else {
+    log("[depth] landscape 模式：跳过单目深度（对天空/云海/水面失效、且丢掉光色大气）。要强开加 --with-depth。");
   }
 
-  if (realDepth) {
-    const mk = (name, extra) => {
-      const o = join(dir, "depth_" + name + ".mp4");
-      ffRun(["-y", "-hide_banner", "-loglevel", "error", "-framerate", String(fps), "-i", join(depthDir, "f%05d.png"),
-        "-vf", "format=gray,normalize" + (extra ? "," + extra : "") + ",format=yuv420p", "-r", String(fps), o], name);
-      outputs.push(o);
-    };
-    if (cmap === "all" || cmap === "gray") mk("gray", "");
-    if (cmap === "all" || cmap === "magma") mk("magma", "pseudocolor=preset=magma");
-    if (cmap === "all" || cmap === "turbo" || cmap === "spectral") mk("spectral", "pseudocolor=preset=turbo");
-    // 四格样张（原帧 | 灰度 | 熔岩 | 光谱），供直观确认与展示
-    const mid = frameFiles[Math.floor(frameFiles.length / 2)];
-    const montage = join(dir, "depth_montage.png");
-    ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", join(framesDir, mid), "-i", join(depthDir, mid),
-      "-filter_complex",
-      "[1]format=gray,normalize,split=3[g0][g1][g2];[g0]scale=360:-1[b];[g1]pseudocolor=preset=magma,scale=360:-1[c];[g2]pseudocolor=preset=turbo,scale=360:-1[d];[0]scale=360:-1[a];[a][b][c][d]hstack=inputs=4",
-      montage], "montage");
-    outputs.push(montage);
-    log("[depth] ✅ 真深度完成（Depth-Anything V2）");
-  } else {
-    // ffmpeg 运动兜底：边缘轮廓（读姿态）+ 帧差热图（读运镜）
-    const edge = join(dir, "motion_edge.mp4");
-    ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vf", "edgedetect=low=0.1:high=0.4,format=yuv420p", edge], "edge");
-    const heat = join(dir, "motion_heat.mp4");
-    ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vf", "tblend=all_mode=difference,format=gray,eq=contrast=4,pseudocolor=preset=turbo,format=yuv420p", heat], "heat");
-    outputs.push(edge, heat);
-    log("[depth] ✅ ffmpeg 运动pass完成（边缘+帧差热图；非真深度）");
+  // ---------- 运动 pass（所有模式都出：读运镜/视差；landscape 时是主力）----------
+  const edge = join(dir, "motion_edge.mp4");
+  ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vf", "edgedetect=low=0.1:high=0.4,format=yuv420p", edge], "edge");
+  const heat = join(dir, "motion_heat.mp4");
+  ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vf", "tblend=all_mode=difference,format=gray,eq=contrast=4,pseudocolor=preset=turbo,format=yuv420p", heat], "heat");
+  outputs.push(edge, heat);
+  log("[depth] ✅ 运动pass完成（motion_edge 轮廓/构图线 + motion_heat 帧差热图/运镜）");
+
+  // ---------- 大气/光色样张（landscape 时额外出：风景反推最需要保留的光线与色调）----------
+  if (skipDepth) {
+    const n = frameFiles.length;
+    const pk = [Math.max(0, Math.floor(n / 6)), Math.floor(n / 2), Math.min(n - 1, Math.floor(n * 5 / 6))].map(i => frameFiles[i]);
+    const atmo = join(dir, "atmosphere.png");
+    ffRun(["-y", "-hide_banner", "-loglevel", "error",
+      "-i", join(framesDir, pk[0]), "-i", join(framesDir, pk[1]), "-i", join(framesDir, pk[2]),
+      "-filter_complex", "[0]scale=440:-1[a];[1]scale=440:-1[b];[2]scale=440:-1[c];[a][b][c]hstack=inputs=3", atmo], "atmosphere");
+    outputs.push(atmo);
+    log("[depth] ✅ 大气样张 atmosphere.png（三帧原图横拼：读光线/色调/大气透视——风景的深度就藏在这里，别用深度图覆盖掉）");
   }
+
   log("[depth] 产物:");
   for (const o of outputs) log("  " + o);
-  log("[depth] 下一步：亲眼逐帧读 depth/motion → 判运镜 → 写分镜头脚本 → 收敛最终提示词（见 references/reverse.md）");
+  if (mode === "landscape") {
+    log("[depth] 读法（风景）：以原帧看光色大气、motion_heat 看运镜视差为主；注意帧差会把硬切也点亮——只在同一镜头内(用②的切镜点)读运镜，别跨切。");
+  } else if (mode === "character") {
+    log("[depth] 读法（人物/产品）：以 depth_* 看身体朝向/肢体前后/前后景层次为主，motion_heat 补判运镜。");
+  } else {
+    log("[depth] 读法（auto）：人物/产品看 depth_*，风景/大场面看 motion_heat+原帧；深度对天空/云海/水面失效时以运动+原帧为准。");
+  }
+  log("[depth] 下一步：亲眼逐帧读 → 判运镜 → 写分镜头脚本 → 收敛最终提示词（见 references/reverse.md）");
 }
 // ---------- meta ----------
 async function cmdSelfTest(cfg) {
@@ -532,6 +565,6 @@ const cfg = loadConfig();
     '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
     "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；不可用/失败自动切 pro 模型 gemini-3-pro-image；不满意画面/参考可 --model gemini 重试",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
-    "  深度图: node studio.mjs depth --video <片> [--fps 4] [--colormap all|gray|magma|turbo] [--out 目录]",
-    "          反推辅助：真深度(Depth-Anything V2)出灰度/熔岩/光谱深度视频，读人物动作与前后景；无 torch 时自动回退 ffmpeg 运动pass"].join("\n"));
+    "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape] [--fps 4] [--colormap all|gray|magma|turbo] [--out 目录]",
+    "          反推辅助·题材自适应：character=真深度(Depth-Anything V2)读人物动作/前后景为主；landscape=运动热图+原帧光色为主、跳过深度(--with-depth 可强开)；auto=两种都出自己挑。所有模式都出 motion_heat 读运镜"].join("\n"));
 })().catch(e => die(e.message));

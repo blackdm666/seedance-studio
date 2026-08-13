@@ -65,7 +65,7 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --fps 4 --out "
 - **深度整体变化**（画面越来越亮=整体逼近镜头=推镜或人物走近；亮块横移=横移运镜/跟随）为 ④ 提供运镜证据。
 
 > **降级**：机器无 Python/torch/transformers 时，`depth` 命令自动回退 **ffmpeg 运动 pass**——`motion_edge.mp4`（边缘轮廓，读姿态）+ `motion_heat.mp4`（帧差热图，读运镜/跟随）。不是真深度，但同样把"动"变得可读。要装真深度：`pip install transformers timm pillow torch`（CPU 版即可）。
-> **合规**：深度图仅用于**理解运动**，绝不把原片人物抽帧/抽脸复用——复刻阶段人物一律用 gpt-image-2 生成新身份（见 replicate.md）。
+> **合规**：深度图仅用于**理解运动**，绝不把原片人物抽帧/抽脸复用——复刻阶段人物一律用 gpt-image-2-4k / gemini-3-pro-image 生成新身份（见 replicate.md）。
 
 ## ④ 运镜判定（Claude 亲眼读 ②③ 帧）
 

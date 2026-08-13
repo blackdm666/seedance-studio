@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// seedance-studio CLI — 88api.ai Seedance 2.5 video + gpt-image-2 keyframes
+// seedance-studio CLI — 88api.ai Seedance 2.5 video + gpt-image-2-4k / gemini-3-pro-image keyframes
 // Zero-dependency Node 18+. Config: ~/.seedance-studio/config.json
 import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -24,14 +24,12 @@ const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
 // 生图模型预设（均走 88api /v1/images 系列端点，实测 2026-08）
 const IMG_MODELS = {
-  "gpt-image-2":        { id: "gpt-image-2",        scale: "2k",     note: "2K 关键帧/锚定图（默认·快·省）" },
-  "gpt-image-2-4k":     { id: "gpt-image-2-4k",     scale: "4k",     note: "高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL）" },
-  "gemini-3-pro-image": { id: "gemini-3-pro-image", scale: "native", note: "Gemini 3 Pro Image（约 2048² 原生；参考图一致性最强，垫图/锁角色首选，返回 b64）" },
+  "gpt-image-2-4k":     { id: "gpt-image-2-4k",     scale: "4k",     note: "默认·高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL）" },
+  "gemini-3-pro-image": { id: "gemini-3-pro-image", scale: "native", note: "pro 模型·Gemini 3 Pro Image（约 2048² 原生；参考图一致性最强，垫图/锁角色首选，返回 b64）" },
 };
 // 友好别名 → 预设键
 const IMG_ALIASES = {
-  "2k":"gpt-image-2","default":"gpt-image-2","gpt":"gpt-image-2","gpt-image-2":"gpt-image-2",
-  "4k":"gpt-image-2-4k","gpt-4k":"gpt-image-2-4k","gpt-image-2-4k":"gpt-image-2-4k",
+  "4k":"gpt-image-2-4k","gpt":"gpt-image-2-4k","gpt-4k":"gpt-image-2-4k","gpt-image-2-4k":"gpt-image-2-4k","default":"gpt-image-2-4k",
   "gemini":"gemini-3-pro-image","gemini-pro":"gemini-3-pro-image","pro":"gemini-3-pro-image","gemini-3-pro-image":"gemini-3-pro-image",
 };
 const IMG_FALLBACK = "gemini-3-pro-image"; // 主模型不可用/失败时自动切换的 pro 模型
@@ -39,7 +37,7 @@ function resolveImgModel(name) {
   if (!name) return IMG_MODELS["gpt-image-2-4k"];
   const key = IMG_ALIASES[String(name).toLowerCase()];
   if (key) return IMG_MODELS[key];
-  return { id: String(name), scale: "2k", note: "(自定义模型 id，按 2K 尺寸表提交)" };
+  return { id: String(name), scale: "native", note: "(自定义模型 id，按原生尺寸提交)" };
 }
 function imgSize(aspect, scale) {
   const base = IMG_ASPECTS[aspect];
@@ -72,10 +70,9 @@ const CAPS = [
   "硬约束（插件已前置校验）：",
   "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
   "生图（关键帧/锚定图，88api /v1/images，2026-08 实测）：",
-  "  • 默认 gpt-image-2-4k（`--model 4k`）：16:9 实测出真 4K UHD 3840×2160；方图约 2880²（返回 URL）",
+  "  • 默认 gpt-image-2-4k：16:9 实测出真 4K UHD 3840×2160；方图约 2880²（返回 URL）",
   "  • gemini-3-pro-image（`--model gemini`，pro 模型）：约 2048² 原生，参考图一致性最强（返回 b64）",
-  "  • gpt-image-2（`--model 2k`）：2K 快省档，做便宜预审",
-  "  • 自动兜底：默认 4k 不可用/失败时，自动切换 pro 模型 gemini-3-pro-image 重试一次（`--no-fallback` 关闭）",
+  "  • 自动兜底：默认档不可用/失败时，自动切换 pro 模型 gemini-3-pro-image 重试一次（`--no-fallback` 关闭）",
   "  • 不满意画面/参考还原：手动 `--model gemini` 用 pro 模型重试（一致性更强）",
   "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]` 走 /v1/images/edits——功能三保产品/人物一致性首选",
 ];
@@ -532,8 +529,8 @@ const cfg = loadConfig();
     "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
-    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini|2k] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
-    "          默认 4k=gpt-image-2-4k(16:9 出真 4K UHD)；不可用/失败自动切 pro 模型 gemini-3-pro-image；不满意画面/参考可 --model gemini 重试",
+    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
+    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；不可用/失败自动切 pro 模型 gemini-3-pro-image；不满意画面/参考可 --model gemini 重试",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  深度图: node studio.mjs depth --video <片> [--fps 4] [--colormap all|gray|magma|turbo] [--out 目录]",
     "          反推辅助：真深度(Depth-Anything V2)出灰度/熔岩/光谱深度视频，读人物动作与前后景；无 torch 时自动回退 ffmpeg 运动pass"].join("\n"));

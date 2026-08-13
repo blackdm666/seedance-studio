@@ -423,20 +423,23 @@ async function cmdDepth(cfg, args) {
   if (!video) die("需要 --video <视频路径>");
   const src = resolve(String(video));
   if (!existsSync(src)) die("视频不存在: " + src);
-  const fps = args.fps ? parseFloat(args.fps) : 4;
   const cmap = String(args.colormap || "all"); // all|gray|magma|turbo
-  // 题材自适应：character(人物/产品·深度为主) | landscape(风景/大场面·运动+原帧为主，跳过深度) | auto(两种pass都出，Claude自己挑)
+  // 题材自适应：character(人物/产品·深度为主) | landscape(风景·运动+原帧、跳深度) | action(武打/动作·骨架+运动+深度) | auto(全出，Claude自己挑)
   let mode = String(args.mode || "auto").toLowerCase();
   if (mode === "product" || mode === "person" || mode === "model") mode = "character";
-  if (mode === "scenery" || mode === "scene" || mode === "landscape") mode = "landscape";
-  if (!["auto", "character", "landscape"].includes(mode)) mode = "auto";
-  // landscape：运镜靠视差+原帧光色，单目深度对天空/云海/水面/雾失效——默认跳过深度（--with-depth 可强开）
-  const skipDepth = mode === "landscape" && !args["with-depth"];
+  if (mode === "scenery" || mode === "scene") mode = "landscape";
+  if (mode === "fight" || mode === "martial" || mode === "combat" || mode === "武打" || mode === "动作") mode = "action";
+  if (!["auto", "character", "landscape", "action"].includes(mode)) mode = "auto";
+  // 抽帧密度按题材：动作要抓零点几秒的招式帧→8fps；风景慢→2fps；其余 4fps
+  const fps = args.fps ? parseFloat(args.fps) : (mode === "action" ? 8 : mode === "landscape" ? 2 : 4);
+  // landscape：运镜靠视差+原帧光色，单目深度对天空/云海/水面/雾失效——默认跳过深度（--with-depth 可强开）；任意模式可 --no-depth 提速
+  const skipDepth = (mode === "landscape" && !args["with-depth"]) || Boolean(args["no-depth"]);
+  const wantPose = mode === "action" && !args["no-pose"]; // 武打骨架条（多人 YOLO-pose）
   const dir = outDir(args);
   const framesDir = join(dir, "frames"); mkdirSync(framesDir, { recursive: true });
   const depthDir = join(dir, "depth"); mkdirSync(depthDir, { recursive: true });
 
-  const modeNote = { character: "深度为主（人物/产品有硬几何）", landscape: "运动+原帧为主，跳过深度（风景/大场面）", auto: "深度+运动都出，读帧自己挑" }[mode];
+  const modeNote = { character: "深度为主（人物/产品有硬几何）", landscape: "运动+原帧为主，跳过深度（风景/大场面）", action: "骨架+运动+深度（武打/快速动作，高帧率抓招式）", auto: "深度+运动都出，读帧自己挑" }[mode];
   log("[depth] 题材模式: " + mode + " —— " + modeNote);
   log("[depth] 抽帧 @ " + fps + "fps → " + framesDir);
   ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vf", "fps=" + fps, join(framesDir, "f%05d.png")], "抽帧");
@@ -497,6 +500,44 @@ async function cmdDepth(cfg, args) {
   outputs.push(edge, heat);
   log("[depth] ✅ 运动pass完成（motion_edge 轮廓/构图线 + motion_heat 帧差热图/运镜）");
 
+  // ---------- 骨架姿态 pass（action 模式：多人 YOLO-pose 画火柴人，读连招/招式/两人相对位置）----------
+  if (wantPose) {
+    const py = detectPython(args);
+    let poseOk = false;
+    if (py) {
+      const chk = spawnSync(py, ["-c", "import ultralytics,cv2"], { encoding: "utf8" });
+      if (chk.status === 0) poseOk = true;
+      else log('[pose] 找到 Python 但缺 ultralytics/opencv，跳过骨架（仍有 edge/heat 读姿态）。装: "' + py + '" -m pip install ultralytics opencv-python');
+    } else {
+      log("[pose] 未找到 Python，跳过骨架 pass。");
+    }
+    if (poseOk) {
+      const overlayDir = join(dir, "pose_overlay"); mkdirSync(overlayDir, { recursive: true });
+      const skelDir = join(dir, "pose_skeleton"); mkdirSync(skelDir, { recursive: true });
+      const worker = join(SCRIPT_DIR, "pose_video.py");
+      const pmodel = args["pose-model"] ? String(args["pose-model"]) : "yolo11n-pose.pt";
+      log("[pose] 运行多人 YOLO-pose（CPU，首次含下载模型）…");
+      const r = spawnSync(py, [worker, framesDir, overlayDir, skelDir, pmodel], { stdio: "inherit" });
+      const skFiles = existsSync(skelDir) ? readdirSync(skelDir).filter(f => f.endsWith(".png")).sort() : [];
+      if (r.status === 0 && skFiles.length) {
+        const ov = join(dir, "pose_overlay.mp4");
+        ffRun(["-y", "-hide_banner", "-loglevel", "error", "-framerate", String(fps), "-i", join(overlayDir, "f%05d.png"), "-vf", "format=yuv420p", "-r", String(fps), ov], "pose_overlay");
+        const sk = join(dir, "pose_skeleton.mp4");
+        ffRun(["-y", "-hide_banner", "-loglevel", "error", "-framerate", String(fps), "-i", join(skelDir, "f%05d.png"), "-vf", "format=yuv420p", "-r", String(fps), sk], "pose_skeleton");
+        // 招式条：等距抽 5 帧纯骨架横拼，一眼看 蓄力→出招→命中→收招
+        const idx = [0, 1, 2, 3, 4].map(k => skFiles[Math.min(skFiles.length - 1, Math.round(k * (skFiles.length - 1) / 4))]);
+        const strip = join(dir, "pose_strip.png");
+        ffRun(["-y", "-hide_banner", "-loglevel", "error",
+          "-i", join(skelDir, idx[0]), "-i", join(skelDir, idx[1]), "-i", join(skelDir, idx[2]), "-i", join(skelDir, idx[3]), "-i", join(skelDir, idx[4]),
+          "-filter_complex", "[0]scale=300:-1[a];[1]scale=300:-1[b];[2]scale=300:-1[c];[3]scale=300:-1[d];[4]scale=300:-1[e];[a][b][c][d][e]hstack=inputs=5", strip], "pose_strip");
+        outputs.push(ov, sk, strip);
+        log("[pose] ✅ 骨架完成（pose_overlay 叠加原帧 / pose_skeleton 纯骨架 / pose_strip 招式条）");
+      } else {
+        log("[pose] 骨架worker失败或无输出，跳过（仍有 edge/heat 读姿态）。");
+      }
+    }
+  }
+
   // ---------- 大气/光色样张（landscape 时额外出：风景反推最需要保留的光线与色调）----------
   if (skipDepth) {
     const n = frameFiles.length;
@@ -515,6 +556,8 @@ async function cmdDepth(cfg, args) {
     log("[depth] 读法（风景）：以原帧看光色大气、motion_heat 看运镜视差为主；注意帧差会把硬切也点亮——只在同一镜头内(用②的切镜点)读运镜，别跨切。");
   } else if (mode === "character") {
     log("[depth] 读法（人物/产品）：以 depth_* 看身体朝向/肢体前后/前后景层次为主，motion_heat 补判运镜。");
+  } else if (mode === "action") {
+    log("[depth] 读法（武打）：pose_strip/pose_skeleton 看招式轨迹与两人相对站位（蓄力→出招→命中→收招）、depth 看出招肢体前后、motion_heat 看打击轨迹与命中/运镜；注意帧差在硬切/命中处会爆亮。复刻层提醒：Seedance 能演可信武打，但不做帧级精确连招/接触点。");
   } else {
     log("[depth] 读法（auto）：人物/产品看 depth_*，风景/大场面看 motion_heat+原帧；深度对天空/云海/水面失效时以运动+原帧为准。");
   }
@@ -565,6 +608,6 @@ const cfg = loadConfig();
     '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
     "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；不可用/失败自动切 pro 模型 gemini-3-pro-image；不满意画面/参考可 --model gemini 重试",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
-    "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape] [--fps 4] [--colormap all|gray|magma|turbo] [--out 目录]",
-    "          反推辅助·题材自适应：character=真深度(Depth-Anything V2)读人物动作/前后景为主；landscape=运动热图+原帧光色为主、跳过深度(--with-depth 可强开)；auto=两种都出自己挑。所有模式都出 motion_heat 读运镜"].join("\n"));
+    "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape|action] [--fps N] [--no-depth] [--out 目录]",
+    "          题材自适应：character=真深度读人物动作/前后景；landscape=运动热图+原帧光色、跳深度(--with-depth 强开)；action=多人骨架(YOLO-pose)+运动+深度读武打连招(--no-pose 关骨架)；auto=都出自己挑。所有模式都出 motion_heat 读运镜"].join("\n"));
 })().catch(e => die(e.message));

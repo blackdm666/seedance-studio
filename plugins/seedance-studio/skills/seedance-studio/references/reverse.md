@@ -10,7 +10,7 @@
 |---|---|---|---|
 | ① 探测 | 元数据（时长/分辨率/帧率/音轨） | **ffprobe** | 脚本 |
 | ② 结构总览 | 联系表 sheet、切镜候选点、密集帧 | **ffmpeg** | 脚本抽帧，Claude 读 |
-| ③ 运动理解 | **按题材自适应**：人物/产品→深度图视频；风景/大场面→运动热图+大气样张 | **Depth-Anything V2 + ffmpeg**（或纯 ffmpeg 运动） | 脚本产出 |
+| ③ 运动理解 | **按题材自适应**：人物/产品→深度图；风景→运动热图+大气样张；武打→多人骨架+运动+深度 | **Depth-Anything V2 / YOLO-pose / ffmpeg** | 脚本产出 |
 | ④ 运镜判定 | 运镜清单（推拉摇移升降/跟随/机位） | Claude 亲眼读 ②③ 帧 | **Claude** |
 | ⑤ 分镜头脚本 | 分镜表（时间段×画面×动作×运镜×声音） | Claude | **Claude** |
 | ⑥ 最终提示词 | 可直接提交的四层提示词 | Claude | **Claude** |
@@ -51,11 +51,13 @@ ffmpeg -y -ss <起点秒> -t <时长> -i "<视频>" -vf "fps=8,scale=640:-1" fra
 node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --mode character --fps 4 --out "<project>/analysis"
 # 宏大风景/山河/云海/建筑空镜（无人物或人物只是比例点）→ 运动+原帧为主，跳过深度
 node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --mode landscape --fps 2 --out "<project>/analysis"
+# 武打/舞蹈/快速动作（招式在零点几秒内）→ 多人骨架 + 运动 + 深度，高帧率
+node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --mode action --fps 8 --out "<project>/analysis"
 # 拿不准 → 两种都出，读帧自己挑（默认）
 node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --mode auto --out "<project>/analysis"
 ```
 
-**怎么判题材**：看 ② 的联系表——画面主角是**人/模特/产品/动物**（有清晰前景主体、要看动作与朝向）走 `character`；主角是**山河/云海/城市天际线/建筑空镜/大气氛围**（主体是空间与光，人物缺席或只是渺小比例点）走 `landscape`。混合片（人物在宏大场景里演）用 `auto`。
+**怎么判题材**：看 ② 的联系表——画面主角是**人/模特/产品/动物**（有清晰前景主体、要看动作与朝向）走 `character`；主角是**山河/云海/城市天际线/建筑空镜/大气氛围**（主体是空间与光，人物缺席或只是渺小比例点）走 `landscape`；**打斗/武打/舞蹈/体育等快速肢体动作**（要逐招看肢体轨迹、两人相对站位）走 `action`；混合片（人物在宏大场景里演）用 `auto`。
 
 ### A. character 模式 —— 真深度图视频
 
@@ -76,11 +78,24 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --mode auto --o
 
 **读法**：主看原帧（光色大气）+ motion_heat（运镜视差）。**注意**：帧差会把**硬切**也点亮——montage 片切镜密集时，只在**同一镜头内**（用 ② 的切镜点）读运镜，别跨切误判成"猛推"。要临时看一眼深度做层次确认，加 `--with-depth`。
 
+### C. action 模式 —— 多人骨架 + 运动 + 深度（武打/快速动作）
+
+打斗一拳一腿都在零点几秒内，低帧率会漏招——所以 action 默认 **8fps 抽帧**，并加一道**多人骨架 pass**（YOLO-pose，能同时框住两名对打者，各给一种颜色）。产出：
+- `pose_strip.png` —— **招式条：等距 5 帧纯骨架横拼**，一眼看 蓄力→出招→命中→收招（**先看这张**）
+- `pose_skeleton.mp4` —— 纯黑底骨架视频：只留火柴人轨迹，读肢体走向与两人相对站位最干净
+- `pose_overlay.mp4` —— 骨架叠加原帧：对照原画面确认哪条肢体在出招
+- `depth_*.mp4` —— 深度也出：判**出招肢体的前后**（哪只手/脚朝向镜头）
+- `motion_heat.mp4` / `motion_edge.mp4` —— 打击轨迹、命中爆点、运镜（甩镜/命中推镜/环绕）
+
+**读法**：`pose_strip`/`pose_skeleton` 读招式与站位、`depth` 读出招肢体前后、`motion_heat` 读打击轨迹与命中/运镜。参数：`--fps`（默认 8）、`--no-pose`（关骨架只留 edge/heat）、`--no-depth`（提速，只骨架+运动）、`--pose-model`（默认 `yolo11n-pose.pt`，可换 `yolo11s/m-pose.pt` 更准更慢）。
+
+> **武打复刻的诚实边界**：反推到**一份到位的打斗提示词 + 逐拍分镜**——能。但 Seedance（及一切生成式视频模型）**不做帧级精确连招复刻**：能演"可信的武打动作 + 命中推镜 + 慢动作氛围"，但精确的多击连招顺序、招招命中的接触点、擒拿/摔投缠斗、兵器对碰，会飘成"泛泛武打感"。速度处理（升格慢动作/抽帧加速）是**剪辑**决定，模型不直接还原。写提示词时按"技法类别 + 节奏 + 运镜 + 氛围"描述，别指望逐帧对齐。
+
 ### 通用参数与降级
 
-参数：`--mode auto|character|landscape`、`--fps`（character 默认 4、landscape 建议 2）、`--colormap all|gray|magma|turbo`、`--model`（默认 Depth-Anything-V2-Small-hf，CPU 约 0.6s/帧）、`--py`（指定 python）、`--with-depth`（landscape 下强开深度）。
+参数：`--mode auto|character|landscape|action`、`--fps`（character 4 / landscape 2 / action 8）、`--colormap all|gray|magma|turbo`、`--model`（深度模型，默认 Depth-Anything-V2-Small-hf，CPU 约 0.6s/帧）、`--py`（指定 python）、`--with-depth`（landscape 下强开深度）、`--no-depth`（任意模式跳深度提速）、`--no-pose` / `--pose-model`（action 骨架）。
 
-> **降级**：无 Python/torch 时，character/auto 自动跳过真深度、仅出 ffmpeg 运动 pass（motion_edge + motion_heat），同样把"动"变可读。装真深度：`pip install transformers timm pillow torch`（CPU 版即可）。
+> **降级**：无 Python/torch 时，character/auto/action 自动跳过真深度、仅出 ffmpeg 运动 pass（motion_edge + motion_heat）；无 ultralytics/opencv 时 action 跳过骨架、仍用 edge（轮廓读姿态）+ heat（轨迹）。装真深度：`pip install transformers timm pillow torch`；装骨架：`pip install ultralytics opencv-python`（均 CPU 版即可）。
 > **合规**：运动理解产物仅用于**理解运动与光色**，绝不把原片人物抽帧/抽脸复用——复刻阶段人物一律用 gpt-image-2-4k / gemini-3-pro-image 生成新身份（见 replicate.md）。
 
 ## ④ 运镜判定（Claude 亲眼读 ②③ 帧）
@@ -91,6 +106,7 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --mode auto --o
 - **摇/移（pan/track）**：背景横向或纵向连续位移，主体相对稳定 → 摇镜 / 平移 / 跟随（帧差热图上表现为整幅位移）。
 - **升降/环绕**：地平线高度变化 / 主体侧面逐渐转出 → 升降臂 / 环绕（风景片看云海/建筑的视差方向）。
 - **机位与景别**：人物片由深度层次判断景别与景深；风景片由原帧的近实远虚 + 构图判断。
+- **武打片**：先用 `pose_strip`/`pose_skeleton` 逐拍拆招（蓄力→出招→命中→收招）、看两人相对站位与距离变化，再叠 `motion_heat` 判命中推镜/甩镜/环绕；**帧差在硬切与命中处会爆亮，别把命中闪光误判成运镜**。
 
 单帧无法区分"推镜"还是"人物走近"——**必须看连续帧 + 运动趋势**共同定论。**风景 montage 片注意**：帧差在硬切处会假性爆亮，只在同一镜头内读运镜。判不准的运镜标"不确定"，不硬写。
 

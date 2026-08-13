@@ -5,8 +5,11 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, 
 import { homedir } from "node:os";
 import { join, resolve, extname, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 const CONFIG_DIR = join(homedir(), ".seedance-studio");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
@@ -321,6 +324,92 @@ function cmdConcat(cfg, args) {
   const dur = probe.status === 0 ? parseFloat(probe.stdout).toFixed(1) + " 秒" : "(ffprobe 不可用)";
   log("[DONE] 拼接完成: " + out + "（总时长 " + dur + "）");
 }
+// ---------- depth / motion pass（功能二/三 辅助：把运镜与人物动作变得可读）----------
+function ffRun(argsArr, label) {
+  const r = spawnSync("ffmpeg", argsArr, { encoding: "utf8" });
+  if (r.error) die("无法运行 ffmpeg（需在 PATH 中）: " + r.error.message);
+  if (r.status !== 0) die("ffmpeg 失败" + (label ? "（" + label + "）" : "") + ":\n" + String(r.stderr || "").slice(-600));
+}
+function detectPython(args) {
+  const cands = [];
+  if (args.py) cands.push(String(args.py));
+  cands.push("python3", "python");
+  cands.push(join(homedir(), "AppData/Local/Programs/Python/Python312/python.exe"));
+  for (const c of cands) {
+    const r = spawnSync(c, ["-c", "import sys;print(sys.version.split()[0])"], { encoding: "utf8" });
+    if (r.status === 0 && String(r.stdout || "").trim()) return c;
+  }
+  return null;
+}
+async function cmdDepth(cfg, args) {
+  const video = args.video || args.input;
+  if (!video) die("需要 --video <视频路径>");
+  const src = resolve(String(video));
+  if (!existsSync(src)) die("视频不存在: " + src);
+  const fps = args.fps ? parseFloat(args.fps) : 4;
+  const cmap = String(args.colormap || "all"); // all|gray|magma|turbo
+  const dir = outDir(args);
+  const framesDir = join(dir, "frames"); mkdirSync(framesDir, { recursive: true });
+  const depthDir = join(dir, "depth"); mkdirSync(depthDir, { recursive: true });
+
+  log("[depth] 抽帧 @ " + fps + "fps → " + framesDir);
+  ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vf", "fps=" + fps, join(framesDir, "f%05d.png")], "抽帧");
+  const frameFiles = readdirSync(framesDir).filter(f => f.endsWith(".png")).sort();
+  if (!frameFiles.length) die("抽帧失败，未得到任何帧");
+  log("[depth] 得到 " + frameFiles.length + " 帧");
+
+  const py = detectPython(args);
+  let realDepth = false;
+  if (py) {
+    const chk = spawnSync(py, ["-c", "import transformers,timm,PIL,torch"], { encoding: "utf8" });
+    if (chk.status === 0) realDepth = true;
+    else log('[depth] 找到 Python 但缺依赖，将回退 ffmpeg 运动pass。装真深度: "' + py + '" -m pip install transformers timm pillow torch');
+  } else {
+    log("[depth] 未找到 Python，回退 ffmpeg 运动pass（安装 Python + torch 后可用真深度）。");
+  }
+
+  const outputs = [];
+  if (realDepth) {
+    const worker = join(SCRIPT_DIR, "depth_video.py");
+    const model = args.model ? String(args.model) : "depth-anything/Depth-Anything-V2-Small-hf";
+    log("[depth] 运行 Depth-Anything V2（CPU，约 0.6s/帧，首次含下载）…");
+    const r = spawnSync(py, [worker, framesDir, depthDir, model], { stdio: "inherit" });
+    const depthFiles = existsSync(depthDir) ? readdirSync(depthDir).filter(f => f.endsWith(".png")) : [];
+    if (r.status !== 0 || !depthFiles.length) { log("[depth] 深度worker失败，回退 ffmpeg 运动pass。"); realDepth = false; }
+  }
+
+  if (realDepth) {
+    const mk = (name, extra) => {
+      const o = join(dir, "depth_" + name + ".mp4");
+      ffRun(["-y", "-hide_banner", "-loglevel", "error", "-framerate", String(fps), "-i", join(depthDir, "f%05d.png"),
+        "-vf", "format=gray,normalize" + (extra ? "," + extra : "") + ",format=yuv420p", "-r", String(fps), o], name);
+      outputs.push(o);
+    };
+    if (cmap === "all" || cmap === "gray") mk("gray", "");
+    if (cmap === "all" || cmap === "magma") mk("magma", "pseudocolor=preset=magma");
+    if (cmap === "all" || cmap === "turbo" || cmap === "spectral") mk("spectral", "pseudocolor=preset=turbo");
+    // 四格样张（原帧 | 灰度 | 熔岩 | 光谱），供直观确认与展示
+    const mid = frameFiles[Math.floor(frameFiles.length / 2)];
+    const montage = join(dir, "depth_montage.png");
+    ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", join(framesDir, mid), "-i", join(depthDir, mid),
+      "-filter_complex",
+      "[1]format=gray,normalize,split=3[g0][g1][g2];[g0]scale=360:-1[b];[g1]pseudocolor=preset=magma,scale=360:-1[c];[g2]pseudocolor=preset=turbo,scale=360:-1[d];[0]scale=360:-1[a];[a][b][c][d]hstack=inputs=4",
+      montage], "montage");
+    outputs.push(montage);
+    log("[depth] ✅ 真深度完成（Depth-Anything V2）");
+  } else {
+    // ffmpeg 运动兜底：边缘轮廓（读姿态）+ 帧差热图（读运镜）
+    const edge = join(dir, "motion_edge.mp4");
+    ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vf", "edgedetect=low=0.1:high=0.4,format=yuv420p", edge], "edge");
+    const heat = join(dir, "motion_heat.mp4");
+    ffRun(["-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vf", "tblend=all_mode=difference,format=gray,eq=contrast=4,pseudocolor=preset=turbo,format=yuv420p", heat], "heat");
+    outputs.push(edge, heat);
+    log("[depth] ✅ ffmpeg 运动pass完成（边缘+帧差热图；非真深度）");
+  }
+  log("[depth] 产物:");
+  for (const o of outputs) log("  " + o);
+  log("[depth] 下一步：亲眼逐帧读 depth/motion → 判运镜 → 写分镜头脚本 → 收敛最终提示词（见 references/reverse.md）");
+}
 // ---------- meta ----------
 async function cmdSelfTest(cfg) {
   requireKey(cfg);
@@ -356,6 +445,7 @@ const cfg = loadConfig();
   if (cmd === "status") return cmdStatus(cfg, args);
   if (cmd === "raw") return cmdRaw(cfg, args);
   if (cmd === "concat") return cmdConcat(cfg, args);
+  if (cmd === "depth") return cmdDepth(cfg, args);
   log(["seedance-studio CLI — 用法:",
     '  配置:  node studio.mjs --set-key "sk-..."   |  --get-config  |  --self-test  |  --caps',
     '  生视频: node studio.mjs video --prompt "..." [--duration 4-30] [--ratio 16:9]',
@@ -363,5 +453,7 @@ const cfg = loadConfig();
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
     '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--dry-run]',
-    "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]"].join("\n"));
+    "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
+    "  深度图: node studio.mjs depth --video <片> [--fps 4] [--colormap all|gray|magma|turbo] [--out 目录]",
+    "          反推辅助：真深度(Depth-Anything V2)出灰度/熔岩/光谱深度视频，读人物动作与前后景；无 torch 时自动回退 ffmpeg 运动pass"].join("\n"));
 })().catch(e => die(e.message));

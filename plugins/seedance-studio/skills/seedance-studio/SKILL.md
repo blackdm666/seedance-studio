@@ -88,9 +88,17 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" video --prompt "<提示词>" --duration 
 
 遇到连续剧需求，给**替代方案**：先做一条**自成一体的单集样片 / 预告 / TVC**（走 T0 或 T1），把风格、主角脸、节奏跑通给用户看；要成系列请换专门的制片工具链，本插件不承担。
 
-## 功能二：反推提示词
+## 功能二：反推提示词（六段可视化流水线）
 
-加载 [references/reverse.md](references/reverse.md) 执行：ffprobe 元数据 → ffmpeg 联系表 + 密集帧 → **亲眼逐帧观察**（证据优先，禁止臆测）→ 固定格式输出提示词。产出的 shotlist 与提示词可直接转入功能三（补素材）或功能一（直接生成）。向用户说明：好视频光有提示词不够——需要素材绑定时主动推荐功能三。
+加载 [references/reverse.md](references/reverse.md) 执行六段，**每段落盘产物、逐段展示给用户**以体现能力：①探测（ffprobe 元数据）→ ②结构总览（ffmpeg 联系表 + 切镜点 + 密集帧）→ ③**运动理解 pass**（`depth` 命令把原片转成**深度图视频**：灰度/熔岩伪彩/光谱伪彩 + 四格样张，人物动作与前后景一眼可读；无 torch 时自动降级 ffmpeg 运动热图）→ ④运镜判定（Claude 亲眼读 ②③ 帧）→ ⑤分镜头脚本（Claude）→ ⑥最终提示词（Claude）。
+
+**为什么要③**：纯抽帧只能看孤立静帧，分不清人物是走近还是镜头推近、手是拿起还是放下——先做深度/运动 pass 把"动"变可读，再判运镜写分镜。命令：
+
+```powershell
+node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --fps 4 --out "<project>/analysis/depth"
+```
+
+FF 的位置：**ffprobe 只做①，ffmpeg 做②抽帧与③的上色/合成（搬运层），真深度交给 Depth-Anything V2，④⑤⑥的判断永远是 Claude 亲眼看帧**——ffmpeg 不做真深度。产出的 shotlist 与提示词可直接转入功能三（补素材）或功能一（直接生成）。向用户说明：好视频光有提示词不够——需要素材绑定时主动推荐功能三。
 
 ## 功能三：可复刻工程包
 

@@ -10,8 +10,21 @@
 | 视频模型名 | `seedance2.5满血版`（必须精确匹配） |
 | 提交任务 | `POST /v1/videos` |
 | 查询任务 | `GET /v1/videos/{id}` |
-| 生图 | `POST /v1/images/generations`（`gpt-image-2` 2K / `gpt-image-2-4k` 4K） |
+| 生图 | `POST /v1/images/generations`（文生图）· `POST /v1/images/edits`（参考图生图，multipart） |
 | 鉴权 | `Authorization: Bearer sk-xxxx` |
+
+## 生图模型（关键帧 / 锚定图，2026-08 实测三款可用）
+
+| 别名 | 模型 id | 端点/返回 | 输出实测 | 用途 |
+|---|---|---|---|---|
+| `2k`（默认） | `gpt-image-2` | generations / b64 或 url | 2K（2048 档） | 关键帧、方向预审（快·省） |
+| `4k` | `gpt-image-2-4k` | generations / **url**（Adobe Firefly S3） | 请求 4096²→实际约 **2880²**（方图上限，长边可更高） | 高清主图 / 海报 / 产品图 |
+| `gemini` | `gemini-3-pro-image` | generations / **b64** | 约 **2048² 原生**（忽略 size 请求值） | 参考图一致性最强，垫图 / 锁角色 / 锁产品 |
+
+- 命令：`node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 2k|4k|gemini] [--ref 参考图 ...]`
+- **参考图生图（img2img / 垫图）**：任意个 `--ref <本地图>` → 自动走 `POST /v1/images/edits`（multipart，字段 `image` 可多次）。实测：喂一张产品/角色图 + 提示词，能保留主体形态换场景/换光——**功能三保「产品外观/人物身份一致」的首选**。三款模型都可接 `--ref`，一致性以 `gemini-3-pro-image` 最强。
+- 尺寸：`gpt-image-2-4k` 用 4K 尺寸表（2K 档 ×2）；`gemini-3-pro-image` 忽略 size、按原生比例出图；size 仍随 `--aspect` 传入（对 4k 有效、对 gemini 仅作提示）。
+- 计费按 token（`usage.output_tokens` 的 image_tokens）；4k / gemini 单张明显贵于 2K 默认档——**批量出锚定图前先 1 张试方向**。
 
 ## 视频能力边界
 

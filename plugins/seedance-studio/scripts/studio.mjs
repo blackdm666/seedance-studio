@@ -22,6 +22,30 @@ const DEFAULTS = {
 };
 const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
+// 生图模型预设（均走 88api /v1/images 系列端点，实测 2026-08）
+const IMG_MODELS = {
+  "gpt-image-2":        { id: "gpt-image-2",        scale: "2k",     note: "2K 关键帧/锚定图（默认·快·省）" },
+  "gpt-image-2-4k":     { id: "gpt-image-2-4k",     scale: "4k",     note: "高清主图/海报（方图实测上限约 2880²，返回 URL）" },
+  "gemini-3-pro-image": { id: "gemini-3-pro-image", scale: "native", note: "Gemini 3 Pro Image（约 2048² 原生；参考图一致性最强，垫图/锁角色首选，返回 b64）" },
+};
+// 友好别名 → 预设键
+const IMG_ALIASES = {
+  "2k":"gpt-image-2","default":"gpt-image-2","gpt":"gpt-image-2","gpt-image-2":"gpt-image-2",
+  "4k":"gpt-image-2-4k","gpt-4k":"gpt-image-2-4k","gpt-image-2-4k":"gpt-image-2-4k",
+  "gemini":"gemini-3-pro-image","gemini-pro":"gemini-3-pro-image","pro":"gemini-3-pro-image","gemini-3-pro-image":"gemini-3-pro-image",
+};
+function resolveImgModel(name) {
+  if (!name) return IMG_MODELS["gpt-image-2"];
+  const key = IMG_ALIASES[String(name).toLowerCase()];
+  if (key) return IMG_MODELS[key];
+  return { id: String(name), scale: "2k", note: "(自定义模型 id，按 2K 尺寸表提交)" };
+}
+function imgSize(aspect, scale) {
+  const base = IMG_ASPECTS[aspect];
+  if (!base) return null;
+  if (scale === "4k") { const [w, h] = base.split("x").map(Number); return (w * 2) + "x" + (h * 2); }
+  return base;
+}
 const MIME = { ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".webp":"image/webp", ".gif":"image/gif" };
 const CAPS = [
   "Seedance 2.5 能力边界（88api，插件已按此硬校验）：",
@@ -46,6 +70,11 @@ const CAPS = [
   "  • watermark:true —— 被忽略，成片无水印",
   "硬约束（插件已前置校验）：",
   "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
+  "生图（关键帧/锚定图，88api /v1/images，2026-08 实测）：",
+  "  • gpt-image-2（默认·2K）：快而省，做关键帧/预审用 `--model 2k`",
+  "  • gpt-image-2-4k：高清主图/海报，`--model 4k`（方图实测上限约 2880²）",
+  "  • gemini-3-pro-image：`--model gemini`，约 2048² 原生，参考图一致性最强",
+  "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]` 走 /v1/images/edits——功能三保产品/人物一致性首选",
 ];
 
 function loadConfig() {
@@ -263,19 +292,49 @@ async function cmdRaw(cfg, args) {
 async function cmdImage(cfg, args) {
   if (!args.prompt) die("需要 --prompt");
   const aspect = String(args.aspect || "16:9");
-  const size = IMG_ASPECTS[aspect];
+  const model = resolveImgModel(args.model);
+  const size = imgSize(aspect, model.scale);
   if (!size) die("aspect 仅支持: " + Object.keys(IMG_ASPECTS).join(", "));
   const n = args.n ? parseInt(args.n, 10) : 1;
   if (!(n >= 1 && n <= 4)) die("--n 限 1–4");
-  const payload = { model: args.model || cfg.imageModel, prompt: String(args.prompt), n, size };
+  // 参考图（垫图/锁角色/锁产品）：任意个 --ref，走 /v1/images/edits
+  const refs = [].concat(args.ref || []).filter(Boolean).map(String);
   const dir = outDir(args);
+
   if (args["dry-run"]) {
-    log("[DRY-RUN] POST " + cfg.baseUrl + "/v1/images/generations");
-    log(JSON.stringify(payload, null, 2)); return;
+    log("[DRY-RUN] " + (refs.length ? "POST " + cfg.baseUrl + "/v1/images/edits (multipart)" : "POST " + cfg.baseUrl + "/v1/images/generations"));
+    log(JSON.stringify({ model: model.id, note: model.note, prompt: String(args.prompt), n, size, refs }, null, 2));
+    return;
   }
-  log("[submit] 生图 " + n + " 张 " + size + " (" + payload.model + ")");
-  const res = await api(cfg, "POST", "/v1/images/generations", payload);
-  const items = res.data || [];
+
+  let items;
+  if (refs.length) {
+    for (const r of refs) if (!existsSync(resolve(r))) die("参考图不存在: " + r);
+    log("[submit] 参考图生图 " + n + " 张 (" + model.id + ") ←垫图 " + refs.length + " 张");
+    const fd = new FormData();
+    fd.append("model", model.id);
+    fd.append("prompt", String(args.prompt));
+    fd.append("n", String(n));
+    fd.append("size", size);
+    for (const r of refs) {
+      const p = resolve(r);
+      const buf = readFileSync(p);
+      if (buf.length > 8 * 1024 * 1024) die("参考图过大 (>8MB)，请压缩: " + p);
+      const mime = MIME[extname(p).toLowerCase()] || "image/png";
+      fd.append("image", new Blob([buf], { type: mime }), "ref" + extname(p));
+    }
+    const res = await fetch(cfg.baseUrl + "/v1/images/edits", { method: "POST", headers: { Authorization: "Bearer " + requireKey(cfg) }, body: fd });
+    const text = await res.text();
+    let json; try { json = JSON.parse(text); } catch { json = { raw: text.slice(0, 500) }; }
+    if (!res.ok) die("参考图生图失败 HTTP " + res.status + ": " + ((json.error && json.error.message) || text.slice(0, 300)));
+    items = json.data || [];
+  } else {
+    const payload = { model: model.id, prompt: String(args.prompt), n, size };
+    log("[submit] 生图 " + n + " 张 " + size + " (" + model.id + ")");
+    const res = await api(cfg, "POST", "/v1/images/generations", payload);
+    items = res.data || [];
+  }
+
   let i = 0;
   for (const it of items) {
     const dest = join(dir, "keyframe_" + Date.now() + "_" + i + ".png");
@@ -285,7 +344,7 @@ async function cmdImage(cfg, args) {
     i++;
     log("[DONE] 图片已保存: " + dest);
   }
-  if (!i) die("响应中没有图片数据: " + JSON.stringify(res).slice(0, 300));
+  if (!i) die("响应中没有图片数据（模型 " + model.id + "）");
 }
 // ---------- concat (ffmpeg) ----------
 function cmdConcat(cfg, args) {
@@ -452,7 +511,8 @@ const cfg = loadConfig();
     "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
-    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--dry-run]',
+    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 2k|4k|gemini] [--ref 参考图 ...] [--dry-run]',
+    "          模型: 2k=gpt-image-2(默认) · 4k=gpt-image-2-4k(高清主图) · gemini=gemini-3-pro-image(参考图一致性最强)",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  深度图: node studio.mjs depth --video <片> [--fps 4] [--colormap all|gray|magma|turbo] [--out 目录]",
     "          反推辅助：真深度(Depth-Anything V2)出灰度/熔岩/光谱深度视频，读人物动作与前后景；无 torch 时自动回退 ffmpeg 运动pass"].join("\n"));

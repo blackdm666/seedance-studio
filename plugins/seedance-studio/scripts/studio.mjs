@@ -22,22 +22,27 @@ const DEFAULTS = {
 };
 const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
-// 生图模型预设（均走 88api /v1/images 系列端点，实测 2026-08）
+// 生图模型预设（gpt/grok 走 /v1/images/*；gemini 走 /v1/chat/completions 多模态，2026-08 实测）
 const IMG_MODELS = {
-  "gpt-image-2-4k":     { id: "gpt-image-2-4k",     scale: "4k",     note: "默认·高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL）" },
-  "gemini-3-pro-image": { id: "gemini-3-pro-image", scale: "native", note: "pro 模型·Gemini 3 Pro Image（约 2048² 原生；参考图一致性最强，垫图/锁角色首选，返回 b64）" },
+  "gpt-image-2-4k":             { id: "gpt-image-2-4k",             kind: "images", scale: "4k",     note: "默认·高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）" },
+  "grok-imagine-image-quality": { id: "grok-imagine-image-quality", kind: "images", scale: "native", note: "xAI Grok 高质量出图（约 2048²；不同上游，OpenAI 通道熔断时兜底首选）" },
+  "gemini-3-pro-image":         { id: "gemini-3-pro-image",         kind: "chat",   scale: "native", note: "pro 模型·Gemini 3 Pro Image（chat 端点，约 2048² 原生；参考图一致性最强，锁角色/垫图首选）" },
 };
 // 友好别名 → 预设键
 const IMG_ALIASES = {
   "4k":"gpt-image-2-4k","gpt":"gpt-image-2-4k","gpt-4k":"gpt-image-2-4k","gpt-image-2-4k":"gpt-image-2-4k","default":"gpt-image-2-4k",
+  "grok":"grok-imagine-image-quality","grok-image":"grok-imagine-image-quality","grok-imagine":"grok-imagine-image-quality","grok-imagine-image-quality":"grok-imagine-image-quality",
   "gemini":"gemini-3-pro-image","gemini-pro":"gemini-3-pro-image","pro":"gemini-3-pro-image","gemini-3-pro-image":"gemini-3-pro-image",
 };
-const IMG_FALLBACK = "gemini-3-pro-image"; // 主模型不可用/失败时自动切换的 pro 模型
+// 主模型失败时的自动兜底链（跨上游：先 Google Gemini chat 端点，再 xAI Grok images 端点，避开同一 OpenAI 通道一起挂）
+const IMG_FALLBACKS = ["gemini-3-pro-image", "grok-imagine-image-quality"];
+function imgKind(id){ return /gemini/i.test(String(id)) ? "chat" : "images"; }
 function resolveImgModel(name) {
   if (!name) return IMG_MODELS["gpt-image-2-4k"];
   const key = IMG_ALIASES[String(name).toLowerCase()];
   if (key) return IMG_MODELS[key];
-  return { id: String(name), scale: "native", note: "(自定义模型 id，按原生尺寸提交)" };
+  const id = String(name);
+  return { id, kind: imgKind(id), scale: "native", note: "(自定义模型 id，按原生尺寸提交)" };
 }
 function imgSize(aspect, scale) {
   const base = IMG_ASPECTS[aspect];
@@ -69,12 +74,13 @@ const CAPS = [
   "  • watermark:true —— 被忽略，成片无水印",
   "硬约束（插件已前置校验）：",
   "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
-  "生图（关键帧/锚定图，88api /v1/images，2026-08 实测）：",
-  "  • 默认 gpt-image-2-4k：16:9 实测出真 4K UHD 3840×2160；方图约 2880²（返回 URL）",
-  "  • gemini-3-pro-image（`--model gemini`，pro 模型）：约 2048² 原生，参考图一致性最强（返回 b64）",
-  "  • 自动兜底：默认档不可用/失败时，自动切换 pro 模型 gemini-3-pro-image 重试一次（`--no-fallback` 关闭）",
+  "生图（关键帧/锚定图，2026-08 实测）：",
+  "  • 默认 gpt-image-2-4k（OpenAI 上游，/v1/images）：16:9 实测出真 4K UHD 3840×2160；方图约 2880²（返回 URL）",
+  "  • gemini-3-pro-image（`--model gemini`，pro 模型，Google 上游）：走 /v1/chat/completions 多模态，约 2048² 原生，参考图一致性最强",
+  "  • grok-imagine-image-quality（`--model grok`，xAI 上游，/v1/images）：不同上游，OpenAI 通道熔断时的兜底首选",
+  "  • 自动兜底链：默认档失败 → grok（不同上游）→ gemini（chat）依次重试（`--no-fallback` 关闭）；上游熔断/429 会给出恢复时间提示",
   "  • 不满意画面/参考还原：手动 `--model gemini` 用 pro 模型重试（一致性更强）",
-  "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]` 走 /v1/images/edits——功能三保产品/人物一致性首选",
+  "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——gpt/grok 走 /v1/images/edits，gemini 走 chat 多模态；功能三保产品/人物一致性首选",
 ];
 
 function loadConfig() {
@@ -87,7 +93,22 @@ function saveConfig(c) {
   writeFileSync(CONFIG_PATH, JSON.stringify(c, null, 2));
 }
 function mask(k) { return !k ? "(not set)" : k.slice(0, 6) + "..." + k.slice(-4); }
-function die(msg) { console.error("[ERROR] " + msg); process.exit(1); }
+// die 不再同步 process.exit()——那会在 undici 连接句柄关闭中途触发 Windows libuv 断言崩溃。
+// 改为抛错，由顶层统一打印并设置 exitCode，让事件循环自然收尾。
+function die(msg) { const e = new Error(msg); e.isDie = true; throw e; }
+// 上游熔断/容量类报错 → 给出"非本地问题+恢复时间"的友好提示
+function upstreamHint(msg) {
+  const s = String(msg || "");
+  if (/circuit breaker|temporarily suspended|no active tokens|auto-recovery|429/i.test(s)) {
+    const m = /auto-recovery probe in ~?(\d+)\s*s/i.exec(s);
+    return "\n[诊断] 88api 上游渠道熔断/容量不足（非你的 Key/提示词/模型名问题）" +
+      (m ? "，约 " + m[1] + " 秒后自动恢复，稍后重试即可。" : "，稍后重试即可。") +
+      " 失败调用不产图、不计费。";
+  }
+  if (/可用渠道不存在|no available channel|503|channel.*(unavailable|suspended)/i.test(s))
+    return "\n[诊断] 上游渠道暂不可用（非本地问题），稍后重试，或换 `--model grok` / `--model gemini`。";
+  return "";
+}
 function log(msg) { console.log(msg); }
 
 function parseArgs(argv) {
@@ -290,7 +311,51 @@ async function cmdRaw(cfg, args) {
 }
 // ---------- image (keyframes) ----------
 // 单次生图请求（文生图 或 参考图 edits），返回 data[] 数组；失败/无输出抛错供上层回退
+// 从 chat/completions 响应里抽出图片，归一成 {b64_json} / {url}（与 images 端点返回同形，存盘逻辑复用）
+function parseChatImages(json) {
+  const out = [];
+  const msg = json && json.choices && json.choices[0] && json.choices[0].message;
+  if (!msg) return out;
+  const push = (u) => {
+    if (!u) return;
+    const m = /^data:image\/[^;]+;base64,(.+)$/s.exec(u);
+    if (m) out.push({ b64_json: m[1] });
+    else if (/^https?:\/\//i.test(u)) out.push({ url: u });
+  };
+  if (Array.isArray(msg.images)) for (const im of msg.images) push((im && im.image_url && im.image_url.url) || (im && im.url) || (im && im.b64_json ? "data:image/png;base64," + im.b64_json : null));
+  const scan = (s) => {
+    if (typeof s !== "string") return;
+    const re = /(data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+|https?:\/\/[^\s)"'<>]+?\.(?:png|jpe?g|webp)(?:\?[^\s)"'<>]*)?)/gi;
+    let m; while ((m = re.exec(s))) push(m[1]);
+  };
+  if (typeof msg.content === "string") scan(msg.content);
+  else if (Array.isArray(msg.content)) for (const p of msg.content) { if (p && p.type === "image_url" && p.image_url) push(p.image_url.url); if (p && typeof p.text === "string") scan(p.text); }
+  return out;
+}
+// gemini 家族：图片经 /v1/chat/completions 多模态返回（chat 一次一图，n>1 循环）
+async function requestChatImages(cfg, modelId, prompt, n, refs) {
+  const items = [];
+  for (let k = 0; k < n; k++) {
+    let content;
+    if (refs.length) {
+      content = [{ type: "text", text: prompt }];
+      for (const r of refs) {
+        const p = resolve(r);
+        const buf = readFileSync(p);
+        if (buf.length > 8 * 1024 * 1024) die("参考图过大 (>8MB)，请压缩: " + p);
+        const mime = MIME[extname(p).toLowerCase()] || "image/png";
+        content.push({ type: "image_url", image_url: { url: "data:" + mime + ";base64," + buf.toString("base64") } });
+      }
+    } else content = prompt;
+    const res = await api(cfg, "POST", "/v1/chat/completions", { model: modelId, messages: [{ role: "user", content }], modalities: ["text", "image"] });
+    const imgs = parseChatImages(res);
+    if (!imgs.length) throw new Error("chat 端点未返回图片（" + modelId + "）");
+    items.push(...imgs);
+  }
+  return items;
+}
 async function requestImages(cfg, modelId, prompt, n, size, refs) {
+  if (imgKind(modelId) === "chat") return requestChatImages(cfg, modelId, prompt, n, refs);
   if (refs.length) {
     const fd = new FormData();
     fd.append("model", modelId);
@@ -330,27 +395,32 @@ async function cmdImage(cfg, args) {
   for (const r of refs) if (!existsSync(resolve(r))) die("参考图不存在: " + r);
   const dir = outDir(args);
   const noFallback = !!args["no-fallback"];
+  // 兜底链：主模型 + 跨上游兜底（去重、去掉与主模型同款）。--no-fallback 只留主模型。
+  const chain = noFallback ? [primary.id] : [primary.id, ...IMG_FALLBACKS.filter(f => f !== primary.id)];
+  const endpointOf = (id) => imgKind(id) === "chat" ? "/v1/chat/completions (多模态)" : (refs.length ? "/v1/images/edits (multipart)" : "/v1/images/generations");
 
   if (args["dry-run"]) {
-    log("[DRY-RUN] " + (refs.length ? "POST " + cfg.baseUrl + "/v1/images/edits (multipart)" : "POST " + cfg.baseUrl + "/v1/images/generations"));
-    log(JSON.stringify({ model: primary.id, note: primary.note, prompt, n, size: imgSize(aspect, primary.scale), refs, fallback: (!noFallback && primary.id !== IMG_FALLBACK) ? IMG_FALLBACK : null }, null, 2));
+    log("[DRY-RUN] 生图兜底链: " + chain.join(" → "));
+    for (const id of chain) {
+      const m = IMG_MODELS[id] || resolveImgModel(id);
+      log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt, n, size: imgSize(aspect, m.scale), refs }, null, 2));
+    }
     return;
   }
 
   let used = primary;
   let items;
   const label = refs.length ? "参考图生图 " + n + " 张 ←垫图 " + refs.length + " 张" : "生图 " + n + " 张 " + imgSize(aspect, primary.scale);
-  log("[submit] " + label + " (" + primary.id + ")");
-  try {
-    items = await requestImages(cfg, primary.id, prompt, n, imgSize(aspect, primary.scale), refs);
-  } catch (e) {
-    // 主模型不可用/失败 → 自动切换 pro 模型（gemini-3-pro-image）重试一次
-    if (noFallback || primary.id === IMG_FALLBACK) die("生图失败（" + primary.id + "）: " + e.message);
-    used = IMG_MODELS[IMG_FALLBACK] || resolveImgModel(IMG_FALLBACK);
-    log("[fallback] " + primary.id + " 不可用/失败（" + e.message + "）→ 切换 pro 模型 " + used.id + " 重试…");
-    try { items = await requestImages(cfg, used.id, prompt, n, imgSize(aspect, used.scale), refs); }
-    catch (e2) { die("主模型与 pro 模型均失败：\n  " + primary.id + " → " + e.message + "\n  " + used.id + " → " + e2.message + "\n检查提示词/参考图/Key 分组。"); }
+  const errs = [];
+  for (let idx = 0; idx < chain.length; idx++) {
+    const id = chain[idx];
+    const m = IMG_MODELS[id] || resolveImgModel(id);
+    if (idx === 0) log("[submit] " + label + " (" + id + " · " + endpointOf(id) + ")");
+    else log("[fallback] " + chain[idx - 1] + " 失败（" + (errs[errs.length - 1] || "").replace(/^[^→]*→\s*/, "") + "）→ 切换 " + id + "（不同上游 · " + endpointOf(id) + "）重试…");
+    try { items = await requestImages(cfg, id, prompt, n, imgSize(aspect, m.scale), refs); used = m; break; }
+    catch (e) { errs.push(id + " → " + e.message); }
   }
+  if (!items) die("生图失败，" + (chain.length > 1 ? "兜底链全部未成" : "已禁用兜底") + "：\n  " + errs.join("\n  ") + upstreamHint(errs.join(" ")));
 
   let i = 0;
   for (const it of items) {
@@ -362,7 +432,7 @@ async function cmdImage(cfg, args) {
     log("[DONE] 图片已保存: " + dest);
   }
   if (!i) die("响应中没有图片数据（模型 " + used.id + "）");
-  if (used.id !== IMG_FALLBACK) log("[提示] 对画面/参考还原不满意？加 --model gemini（" + IMG_FALLBACK + "，pro 模型，一致性更强）重试。");
+  if (used.id !== "gemini-3-pro-image") log("[提示] 对画面/参考还原不满意？加 --model gemini（pro 模型，一致性更强）重试。");
 }
 // ---------- concat (ffmpeg) ----------
 function cmdConcat(cfg, args) {
@@ -605,9 +675,9 @@ const cfg = loadConfig();
     "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
-    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
-    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；不可用/失败自动切 pro 模型 gemini-3-pro-image；不满意画面/参考可 --model gemini 重试",
+    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini|grok] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
+    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；失败自动跨上游兜底 grok→gemini；gemini 走 chat 端点、一致性最强，不满意可 --model gemini 重试",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape|action] [--fps N] [--no-depth] [--out 目录]",
     "          题材自适应：character=真深度读人物动作/前后景；landscape=运动热图+原帧光色、跳深度(--with-depth 强开)；action=多人骨架(YOLO-pose)+运动+深度读武打连招(--no-pose 关骨架)；auto=都出自己挑。所有模式都出 motion_heat 读运镜"].join("\n"));
-})().catch(e => die(e.message));
+})().catch(e => { console.error("[ERROR] " + (e && e.message ? e.message : String(e))); process.exitCode = 1; });

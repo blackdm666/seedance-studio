@@ -56,7 +56,8 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" <参数>
 | 功能三：视频 → 可复刻工程包 | 复刻工程包流程 | [references/replicate.md](references/replicate.md)（内部先走 reverse.md） |
 | 生成的视频翻车了 | 诊断后针对性修复单段 | [references/troubleshooting.md](references/troubleshooting.md) |
 | 要现成模板 | 套用后走快速出片 | [references/prompt-recipes.md](references/prompt-recipes.md) |
-| 接口细节 / 报错 / 参数 | 查表回答 | [references/api.md](references/api.md) |
+| 接口细节 / 报错 / 参数（88api 后端） | 查表回答 | [references/api.md](references/api.md) |
+| 官方原生能力 / 视频编辑·延长 / 首尾帧 / 多语言配音 / 请求格式 | 查官方能力全集 | [references/ark-native.md](references/ark-native.md) |
 
 ## 功能一：快速出片（单段 ≤30 秒）
 
@@ -104,9 +105,9 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" video --prompt "<提示词>" --duration 
 - 视频/音频参考必须公网 URL；本地视频参考给出替代方案（对象存储，或抽帧转图片参考）。
 - 拼接用 `concat` 命令（同 API 产出编码一致，默认流复制；异常时加 `--reencode`）。
 
-## 与即梦网页版的边界
+## 与即梦网页版的边界（2026-08 三档实测）
 
-本插件生成面为 88api API：单段 4–30 秒、720P、图/视频/音频参考合计 ≤50。**可用**：文/图/视频/音频多模态参考，其中参考视频可迁移镜头语言、参考音频可卡节奏（Seedance 2.5 原生能力，经此 API 透传）。**不经此 API**（即梦网页 / Lumina / Dreamina 原生专属）：区域级局部编辑、两次视频延长、30 秒以上原生超长单段、绿幕、白模渲染、4K——需要时为用户生成可粘贴到即梦网页的提示词作为降级方案，并明确说明边界。
+本插件生成面为 88api API：单段 4–30 秒、480p/720p、图/视频/音频参考合计 ≤50。**实测可用**：文/图/视频/音频多模态参考（参考视频迁运镜、参考音频卡节奏）、同步有声（中文台词直出普通话、多语言配音）、声音语法 `()<>{}【】`、首帧/首尾帧、480p；**视频编辑 / 视频延长可用但约 50% 成功率、需容错重试**。**实测不透传 / 需降级到即梦网页**：**对口型**（原生台词只是配音、人物嘴不动）、`output_format:mov`（回吐标准 mp4）、`watermark`（无水印）、区域级局部编辑、白模渲染、绿幕、4K——需要时为用户生成可粘贴到即梦网页的提示词作降级，并明确说明边界。**硬约束**：**视频/音频参考必须同时配 ≥1 张图片参考**（无纯视频/纯音频参考，插件已前置拦截）。
 
 ## 输出契约
 

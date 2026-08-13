@@ -60,6 +60,19 @@ Translate emotion into behavior:
 
 State one of: natural ambience, specific SFX, dialogue, voice reference, music, or silence. When clean footage matters, write `全程无字幕、无背景音乐，仅保留[环境声/人声/指定音效]` and repeat it once in the global lock.
 
+### Official sound syntax (write audio directly into the prompt)
+
+Seedance 2.5 generates synced audio natively. Mark each sound type with its bracket so the model separates them:
+
+- Music → `( )`  · SFX → `< >`  · Dialogue → `{ }`  · On-screen subtitle → `【 】`
+- Example: `女孩转身微笑 {你终于来了}<关门声>（温柔的钢琴）`
+
+### Native multilingual voice (11 languages)
+
+Prompt input and **spoken output** are native in: Chinese, English, Spanish, Indonesian, Malay, Thai, Arabic, Portuguese, Vietnamese, Japanese, Korean. **A Chinese `{台词}` yields native Mandarin speech directly—no external TTS needed for a single short/TVC.** Prefix non-Chinese lines with the language, e.g. `{英语：Welcome back}`. Caveat: there is no voice-ID lock, so timbre can drift across separate generations—for multi-shot voice consistency, still decouple to a fixed-preset TTS.
+
+**Verified 2026-08 (88api): dialogue is voiceover only—the character's mouth does NOT lip-sync to it.** Native `{台词}` lays a clean spoken track over the shot, but the speaker's lips won't match the words. For a talking-head where the mouth must sync, don't rely on native dialogue: frame away from a mouth close-up, cut to B-roll while the line plays, or route the shot to a dedicated lip-sync tool (即梦网页 对口型). This is a model trait, confirmed identical for Chinese and English.
+
 ## Final quality pass
 
 Confirm:

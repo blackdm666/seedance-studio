@@ -23,12 +23,26 @@ const MIME = { ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".
 const CAPS = [
   "Seedance 2.5 能力边界（88api，插件已按此硬校验）：",
   "  • 时长 4–30 秒（整数，按秒计费）",
-  "  • 分辨率固定 720P（填更高不生效）",
+  "  • 分辨率 480p / 720p（实测均生效；不支持 1080p/4k）",
   "  • 画幅 ratio: auto / 21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16",
   "  • 图片参考 ≤30 张（本地图自动转 base64，无需公网 URL）",
-  "  • 视频参考 ≤10 个（必须公网直连 http(s) URL）",
-  "  • 音频参考 ≤10 个（必须公网直连 http(s) URL）",
+  "  • 视频参考 ≤10 个（必须公网直连 http(s) URL；官方：每段 2–30s、总时长 ≤30s）",
+  "  • 音频参考 ≤10 个（必须公网直连 http(s) URL；官方：每段 2–30s、总时长 ≤30s）",
   "  • 同步音频 generate_audio 默认开；seed 可控（-1 随机）",
+  "原生有声（写进提示词即可，与后端无关）：",
+  "  • 声音语法 音乐() 音效<> 台词{} 字幕【】",
+  "  • 11 语言原生配音：中/英/西/印尼/马来/泰/阿/葡/越/日/韩（中文台词直出普通话）",
+  "  • 注意：原生台词是「配音/画外音」，不是对口型——人物嘴型不跟随（需口型请走即梦网页对口型）",
+  "88api 实测透传（2026-08 三档实测，可用）：",
+  "  • 首帧 first_frame / 首尾帧 first+last_frame（实测生效）",
+  "  • 视频参考 reference_video（迁运镜）/ 音频参考 reference_audio（卡节奏）",
+  "  • 分辨率 480p（resolution:480p 实测生效，输出 854×480）",
+  "  • 视频编辑 edit / 视频延长 extend（可用但约 50% 成功率，需自动容错重试）",
+  "88api 实测忽略（缩水，别向用户承诺）：",
+  "  • output_format:mov —— 被忽略，统一回吐标准 mp4（isom/yuv420p）",
+  "  • watermark:true —— 被忽略，成片无水印",
+  "硬约束（插件已前置校验）：",
+  "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
 ];
 
 function loadConfig() {
@@ -119,6 +133,12 @@ function buildVideoPayload(cfg, args) {
   for (const u of [...videoUrls, ...audioUrls]) {
     if (!/^https?:\/\//.test(u)) die("视频/音频参考必须是公网 http(s) URL（本地文件不支持，需先上传对象存储）: " + u);
   }
+  // 实测硬约束（88api 后端）：带视频/音频参考时必须至少配 1 张图片参考，
+  // 否则上游直接 400: "video/audio reference requires at least one image reference"。
+  // 这里前置拦截，省掉一次无谓的失败提交。
+  if ((videoUrls.length || audioUrls.length) && !images.length) {
+    die("88api 约束：使用视频/音频参考时必须同时提供至少 1 张图片参考（--image <图>）。\n纯视频参考或纯音频参考在本后端不支持——请补一张锚定图/关键帧一起提交。");
+  }
   const payload = {
     model: cfg.videoModel,
     duration,
@@ -208,6 +228,33 @@ async function cmdStatus(cfg, args) {
   if (args.wait) return pollTask(cfg, taskId, outDir(args));
   const st = await api(cfg, "GET", "/v1/videos/" + taskId);
   log(JSON.stringify(st, null, 2));
+}
+// ---------- raw (capability probing: POST an arbitrary payload file as-is) ----------
+async function cmdRaw(cfg, args) {
+  if (!args.file) die("需要 --file <payload.json>");
+  const p = resolve(String(args.file));
+  if (!existsSync(p)) die("文件不存在: " + p);
+  let payload;
+  try { payload = JSON.parse(readFileSync(p, "utf8")); } catch (e) { die("payload JSON 解析失败: " + e.message); }
+  if (!payload.model) payload.model = cfg.videoModel;
+  const dir = outDir(args);
+  if (args["dry-run"]) {
+    log("[DRY-RUN][raw] POST " + cfg.baseUrl + "/v1/videos");
+    log(JSON.stringify(sanitizePayload(payload), null, 2));
+    return;
+  }
+  const runFile = join(dir, "run.json");
+  if (existsSync(runFile)) { const prev = JSON.parse(readFileSync(runFile, "utf8")); die("输出目录已有任务 " + prev.taskId + "（防重复提交）。续查:\n  node studio.mjs status --task " + prev.taskId + ' --wait --out "' + dir + '"'); }
+  log("[submit][raw] POST /v1/videos");
+  let task;
+  try { task = await api(cfg, "POST", "/v1/videos", payload); }
+  catch (e) { die("提交失败: " + e.message + "\nbody=" + JSON.stringify(e.body || {}).slice(0, 500)); }
+  const taskId = task.id || task.task_id;
+  if (!taskId) die("提交响应中无任务 ID: " + JSON.stringify(task).slice(0, 400));
+  writeFileSync(runFile, JSON.stringify({ taskId, submittedAt: new Date().toISOString(), payload: sanitizePayload(payload) }, null, 2));
+  log("[task] " + taskId + " (status=" + task.status + ")");
+  if (args["no-wait"]) { log("稍后: node studio.mjs status --task " + taskId + ' --wait --out "' + dir + '"'); return; }
+  await pollTask(cfg, taskId, dir);
 }
 // ---------- image (keyframes) ----------
 async function cmdImage(cfg, args) {
@@ -307,6 +354,7 @@ const cfg = loadConfig();
   if (cmd === "video") return cmdVideo(cfg, args);
   if (cmd === "image") return cmdImage(cfg, args);
   if (cmd === "status") return cmdStatus(cfg, args);
+  if (cmd === "raw") return cmdRaw(cfg, args);
   if (cmd === "concat") return cmdConcat(cfg, args);
   log(["seedance-studio CLI — 用法:",
     '  配置:  node studio.mjs --set-key "sk-..."   |  --get-config  |  --self-test  |  --caps',

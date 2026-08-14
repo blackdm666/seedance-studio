@@ -231,17 +231,20 @@ function buildVideoPayload(cfg, args) {
   const images = asArray(args.image);
   const videoUrls = asArray(args["video-url"]);
   const audioUrls = asArray(args["audio-url"]);
+  const firstFrame = args["first-frame"] ? String(args["first-frame"]) : "";
+  const lastFrame = args["last-frame"] ? String(args["last-frame"]) : "";
   if (images.length > 30) die("图片参考最多 30 张");
   if (videoUrls.length > 10) die("视频参考最多 10 个");
   if (audioUrls.length > 10) die("音频参考最多 10 个");
   for (const u of [...videoUrls, ...audioUrls]) {
     if (!/^https?:\/\//.test(u)) die("视频/音频参考必须是公网 http(s) URL（本地文件不支持，需先上传对象存储）: " + u);
   }
-  // 实测硬约束（88api 后端）：带视频/音频参考时必须至少配 1 张图片参考，
+  const hasImageAnchor = images.length || firstFrame || lastFrame;
+  // 实测硬约束（88api 后端）：带视频/音频参考时必须至少配 1 张图片参考（首帧/尾帧也算），
   // 否则上游直接 400: "video/audio reference requires at least one image reference"。
   // 这里前置拦截，省掉一次无谓的失败提交。
-  if ((videoUrls.length || audioUrls.length) && !images.length) {
-    die("88api 约束：使用视频/音频参考时必须同时提供至少 1 张图片参考（--image <图>）。\n纯视频参考或纯音频参考在本后端不支持——请补一张锚定图/关键帧一起提交。");
+  if ((videoUrls.length || audioUrls.length) && !hasImageAnchor) {
+    die("88api 约束：使用视频/音频参考时必须同时提供至少 1 张图片参考（--image / --first-frame <图>）。\n纯视频参考或纯音频参考在本后端不支持——请补一张锚定图/关键帧一起提交。");
   }
   const payload = {
     model: cfg.videoModel,
@@ -251,19 +254,27 @@ function buildVideoPayload(cfg, args) {
     generate_audio: !args["no-audio"],
   };
   if (args.seed !== undefined) payload.seed = parseInt(args.seed, 10);
-  const hasMulti = images.length || videoUrls.length || audioUrls.length;
+  const hasMulti = images.length || videoUrls.length || audioUrls.length || firstFrame || lastFrame;
   if (!prompt) die("需要 --prompt 提示词");
   payload.prompt = prompt;
-  // 实测：上游要求顶层 prompt 必填。仅图片参考时用 images 简写（最稳路径）；
-  // 含视频/音频参考时才用 content 数组（text 同时放入 content 以兼容上游）。
-  if (images.length && !videoUrls.length && !audioUrls.length) {
-    payload.images = images.map(p => /^https?:\/\//.test(p) ? p : imageToDataUrl(resolve(p)));
+  const toUrl = p => /^https?:\/\//.test(p) ? p : imageToDataUrl(resolve(p));
+  // 实测：上游要求顶层 prompt 必填。
+  // ① 带首帧/尾帧（图生视频）→ 必须走 content[] 并给每项打 role（first_frame/last_frame/reference_*），首帧决定片头画面。
+  // ② 仅普通图片参考（无首尾帧、无视频/音频）→ 用 images 简写（最稳路径）。
+  // ③ 其它含视频/音频参考的多模态情况 → content 数组（不打 role，沿用历史稳定写法）。
+  if (firstFrame || lastFrame) {
+    const content = [{ type: "text", text: prompt }];
+    if (firstFrame) content.push({ type: "image_url", role: "first_frame", image_url: { url: toUrl(firstFrame) } });
+    if (lastFrame) content.push({ type: "image_url", role: "last_frame", image_url: { url: toUrl(lastFrame) } });
+    for (const p of images) content.push({ type: "image_url", role: "reference_image", image_url: { url: toUrl(p) } });
+    for (const u of videoUrls) content.push({ type: "video_url", role: "reference_video", video_url: { url: u } });
+    for (const u of audioUrls) content.push({ type: "audio_url", role: "reference_audio", audio_url: { url: u } });
+    payload.content = content;
+  } else if (images.length && !videoUrls.length && !audioUrls.length) {
+    payload.images = images.map(p => toUrl(p));
   } else if (hasMulti) {
     const content = [{ type: "text", text: prompt }];
-    for (const p of images) {
-      const url = /^https?:\/\//.test(p) ? p : imageToDataUrl(resolve(p));
-      content.push({ type: "image_url", image_url: { url } });
-    }
+    for (const p of images) content.push({ type: "image_url", image_url: { url: toUrl(p) } });
     for (const u of videoUrls) content.push({ type: "video_url", video_url: { url: u } });
     for (const u of audioUrls) content.push({ type: "audio_url", audio_url: { url: u } });
     payload.content = content;
@@ -317,7 +328,8 @@ async function cmdVideo(cfg, args) {
     const prev = JSON.parse(readFileSync(runFile, "utf8"));
     die("输出目录已有任务 " + prev.taskId + "（防重复提交）。续查:\n  node studio.mjs status --task " + prev.taskId + ' --wait --out "' + dir + '"\n或换一个 --out 目录。');
   }
-  log("[submit] POST /v1/videos (" + payload.duration + "s, " + payload.ratio + ", audio=" + payload.generate_audio + ")");
+  const frameNote = payload.content ? (payload.content.some(c => c.role === "first_frame") ? ", first_frame" : "") + (payload.content.some(c => c.role === "last_frame") ? ", last_frame" : "") : "";
+  log("[submit] POST /v1/videos (" + payload.duration + "s, " + payload.ratio + ", audio=" + payload.generate_audio + frameNote + ")");
   const task = await api(cfg, "POST", "/v1/videos", payload);
   const taskId = task.id || task.task_id;
   if (!taskId) die("提交响应中无任务 ID: " + JSON.stringify(task).slice(0, 400));
@@ -769,6 +781,7 @@ const cfg = loadConfig();
   log(["seedance-studio CLI — 用法:",
     '  配置:  node studio.mjs --set-key "sk-..."   |  --get-config  |  --self-test  |  --caps',
     '  生视频: node studio.mjs video --prompt "..." [--duration 4-30] [--ratio 16:9]',
+    "          [--first-frame 图] [--last-frame 图]（图生视频：片头随首帧/片尾随尾帧）",
     "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",

@@ -41,6 +41,7 @@
 - 参考素材两种写法：`images`（图片简写数组）或 `input_reference`（string/string[]，素材 URL 或图片 Data URL）；含视频/音频参考时用多模态 `content[]`：`text` / `image_url`（≤30，**可用 base64 Data URL 传本地图**）/ `video_url`（≤10）/ `audio_url`（≤10）
 - **多模态参考合计 ≤50**（30 图 + 10 视频 + 10 音频）；官方建议**按职责组织**参考：人物 / 产品 / 场景 / 风格 / 运镜(参考视频) / 音乐情绪(参考音频)，并在提示词里逐条声明每个素材只负责哪一维
 - 视频与音频参考必须公网可直连 HTTP(S)，不能依赖 Cookie 或登录态；图床 403 时换对象存储
+- **图生视频（首帧/尾帧）CLI**：`video --first-frame <图> [--last-frame <图>]` → 插件自动走 `content[]` 并给每项打 `role`（`first_frame`/`last_frame`，附带的 `--image` 记为 `reference_image`）。**片头精确从首帧画面开始**（分段拼接必用：让每段起幅 = 事先生成好的关键帧，段间可无缝续接）；ratio 用 `16:9` 与 16:9 关键帧匹配即可。
 
 ## Seedance 2.5 原生能力 vs 88api 透传边界（2026-08 三档实测）
 

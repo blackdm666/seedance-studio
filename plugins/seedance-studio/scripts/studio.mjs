@@ -3,7 +3,7 @@
 // Zero-dependency Node 18+. Config: ~/.seedance-studio/config.json
 import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve, extname, dirname } from "node:path";
+import { join, resolve, extname, dirname, basename } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
@@ -40,6 +40,9 @@ const IMG_ALIASES = {
 };
 // 主模型失败时的自动兜底链（跨上游：切 Google Gemini chat 端点，避开同一 OpenAI 通道一起挂）
 const IMG_FALLBACKS = ["gemini-3-pro-image"];
+// 并发（抄 88api-image-gen：MAX_CONCURRENCY=10、DEFAULTS.concurrency=3）；单 key 默认保守，别把上游打熔断
+const IMG_MAX_CONCURRENCY = 10;
+const IMG_DEFAULT_CONCURRENCY = 3;
 function imgKind(id){ return /gemini/i.test(String(id)) ? "chat" : "images"; }
 function resolveImgModel(name) {
   if (!name) return IMG_MODELS["gpt-image-2-4k"];
@@ -427,16 +430,61 @@ async function requestImages(cfg, modelId, prompt, n, size, refs, aspect, resolu
   if (!items.length) throw new Error("无图片数据");
   return items;
 }
+// 并发池：抄 88api-image-gen 的 `Promise.all(Array.from({length}, dispatcher))` 结构（单 key，去掉多 worker/粘性分组）。
+// N 个 dispatcher 从共享游标 cursor 拉任务，跑完一个立刻拉下一个，直到队列空。
+async function runImagePool(total, concurrency, runTask) {
+  const results = new Array(total);
+  const limit = Math.max(1, Math.min(Number(concurrency) || IMG_DEFAULT_CONCURRENCY, total, IMG_MAX_CONCURRENCY));
+  let cursor = 0, active = 0, peak = 0;
+  async function dispatcher() {
+    for (;;) {
+      const index = cursor++;
+      if (index >= total) return;
+      active++; peak = Math.max(peak, active);
+      try { results[index] = await runTask(index); }
+      finally { active--; }
+    }
+  }
+  await Promise.all(Array.from({ length: limit }, () => dispatcher()));
+  return { results, peak, limit };
+}
+// 单张生成流水线：主模型 → 跨上游兜底链，含错误分类（确定性停链 / 瞬时同模型重试 1 次 / 容量换上游）。返回 1 张的原始 item。
+async function generateOneImage(cfg, slot) {
+  const { prompt, aspect, resolution, refs, chain } = slot;
+  const errs = [];
+  let fatal = false;
+  for (let idx = 0; idx < chain.length && !fatal; idx++) {
+    const id = chain[idx];
+    const m = IMG_MODELS[id] || resolveImgModel(id);
+    const size = imgSize(aspect, m.scale);
+    let attempt = 0;
+    for (;;) {
+      try {
+        const items = await requestImages(cfg, id, prompt, 1, size, refs, aspect, resolution);
+        return { ok: true, model: m, items, spec: imgKind(id) === "chat" ? (aspect + " " + resolution) : size, fellBack: idx > 0 };
+      } catch (e) {
+        const cls = classifyImgError(e.message);
+        if (cls === "transient" && attempt < 1) { attempt++; await sleep(3000); continue; } // ③ 瞬时抖动：同模型重试 1 次
+        errs.push(id + " → " + e.message);
+        if (cls === "fatal") fatal = true; // ① 确定性错误：停整条链
+        break; // ② 容量/未知/瞬时用尽 → 走下一个上游
+      }
+    }
+  }
+  return { ok: false, errs, fatal };
+}
 async function cmdImage(cfg, args) {
-  if (!args.prompt) die("需要 --prompt");
-  const prompt = String(args.prompt);
+  const prompts = asArray(args.prompt).map(String).map((s) => s.trim()).filter(Boolean);
+  if (!prompts.length) die("需要 --prompt（可重复 --prompt 出多张不同图，并发跑）");
   const aspect = String(args.aspect || "16:9");
   const primary = resolveImgModel(args.model);
   if (!imgSize(aspect, primary.scale)) die("aspect 仅支持: " + Object.keys(IMG_ASPECTS).join(", "));
   const resolution = String(args.resolution || "4K").toUpperCase(); // 仅 gemini(chat) 用；1K/2K/4K
   if (!IMG_RESOLUTIONS.has(resolution)) die("--resolution 仅支持 1K / 2K / 4K（仅对 --model gemini 生效）");
   const n = args.n ? parseInt(args.n, 10) : 1;
-  if (!(n >= 1 && n <= 4)) die("--n 限 1–4");
+  if (!(n >= 1 && n <= 4)) die("--n 限 1–4（每个 --prompt 出几张）");
+  const concurrency = args.concurrency ? parseInt(args.concurrency, 10) : IMG_DEFAULT_CONCURRENCY;
+  if (!(concurrency >= 1 && concurrency <= IMG_MAX_CONCURRENCY)) die("--concurrency 限 1–" + IMG_MAX_CONCURRENCY);
   // 参考图（垫图/锁角色/锁产品）：任意个 --ref，走 /v1/images/edits
   const refs = [].concat(args.ref || []).filter(Boolean).map(String);
   for (const r of refs) if (!existsSync(resolve(r))) die("参考图不存在: " + r);
@@ -446,65 +494,82 @@ async function cmdImage(cfg, args) {
   const chain = noFallback ? [primary.id] : [primary.id, ...IMG_FALLBACKS.filter(f => f !== primary.id)];
   const endpointOf = (id) => imgKind(id) === "chat" ? "/v1/chat/completions (多模态)" : (refs.length ? "/v1/images/edits (multipart)" : "/v1/images/generations");
 
+  // 批次：每个提示词各出 n 张 → 总槽位；并发池并行跑（抄 88api-image-gen 的 dispatcher×N 结构）
+  const slots = [];
+  for (let p = 0; p < prompts.length; p++)
+    for (let k = 0; k < n; k++)
+      slots.push({ prompt: prompts[p], aspect, resolution, refs, chain });
+  const total = slots.length;
+  const lanes = Math.min(concurrency, total);
+
   if (args["dry-run"]) {
-    log("[DRY-RUN] 生图兜底链: " + chain.join(" → "));
+    log("[DRY-RUN] 生图 " + total + " 张（" + prompts.length + " 提示词 × " + n + "）· 并发 " + lanes + " · 兜底链 " + chain.join(" → "));
     for (const id of chain) {
       const m = IMG_MODELS[id] || resolveImgModel(id);
-      if (imgKind(id) === "chat") {
-        // gemini：chat 端点结构化参数（不含像素 size / n）
-        log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt, aspect_ratio: GEMINI_ASPECTS.has(aspect) ? aspect : "16:9", image_size: resolution, refs }, null, 2));
-      } else {
+      if (imgKind(id) === "chat") // gemini：chat 端点结构化参数（不含像素 size / n）
+        log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt: prompts[0], aspect_ratio: GEMINI_ASPECTS.has(aspect) ? aspect : "16:9", image_size: resolution, refs }, null, 2));
+      else {
         const size = imgSize(aspect, m.scale);
-        log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt: imageApiPrompt(prompt, size), n, size, refs }, null, 2));
+        log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt: imageApiPrompt(prompts[0], size), n: 1, size, refs }, null, 2));
       }
     }
+    if (prompts.length > 1) log("... 其余 " + (prompts.length - 1) + " 个提示词同构，每次请求单张（n 靠并发池循环）");
     return;
   }
 
-  let used = primary;
-  let items;
-  let fatal = false;
   const primarySpec = imgKind(primary.id) === "chat" ? (aspect + " " + resolution) : imgSize(aspect, primary.scale);
-  const label = refs.length ? "参考图生图 " + n + " 张 ←垫图 " + refs.length + " 张" : "生图 " + n + " 张 " + primarySpec;
-  const errs = [];
-  for (let idx = 0; idx < chain.length && !items && !fatal; idx++) {
-    const id = chain[idx];
-    const m = IMG_MODELS[id] || resolveImgModel(id);
-    const size = imgSize(aspect, m.scale);
-    if (idx === 0) log("[submit] " + label + " (" + id + " · " + endpointOf(id) + ")");
-    else log("[fallback] " + chain[idx - 1] + " 失败（" + (errs[errs.length - 1] || "").replace(/^[^→]*→\s*/, "") + "）→ 切换 " + id + "（不同上游 · " + endpointOf(id) + "）重试…");
-    let attempt = 0;
-    for (;;) {
-      try { items = await requestImages(cfg, id, prompt, n, size, refs, aspect, resolution); used = m; break; }
-      catch (e) {
-        const cls = classifyImgError(e.message);
-        // ③ 瞬时抖动：同模型快速重试 1 次（不计入 errs，不换上游）
-        if (cls === "transient" && attempt < 1) { attempt++; log("[retry] " + id + " 瞬时抖动（" + e.message + "），同模型重试…"); await sleep(3000); continue; }
-        errs.push(id + " → " + e.message);
-        // ① 确定性错误：换模型/重试都无用 → 停整条链，直接诊断
-        if (cls === "fatal") { fatal = true; }
-        break; // ② 容量/未知/瞬时重试用尽 → 出内循环，走下一个上游
-      }
+  const submit = refs.length ? "参考图生图 " + total + " 张 ←垫图 " + refs.length + " 张" : "生图 " + total + " 张 " + primarySpec;
+  log("[submit] " + submit + "（" + prompts.length + " 提示词 × " + n + "，并发 " + lanes + "）· 主模型 " + primary.id
+    + (noFallback ? "（--no-fallback，无兜底）" : " → 兜底 " + chain.slice(1).join("/")) + " · " + endpointOf(primary.id));
+
+  const batchTs = Date.now();
+  const pad = (x) => String(x).padStart(2, "0");
+  const { results, peak } = await runImagePool(total, concurrency, async (index) => {
+   try {
+    const r = await generateOneImage(cfg, slots[index]);
+    if (!r.ok) {
+      log("  [" + (index + 1) + "/" + total + "] FAIL " + (r.fatal ? "确定性错误" : "上游未成") + "：" + r.errs.join(" | "));
+      return { index, ok: false, errs: r.errs, fatal: r.fatal };
     }
-  }
-  if (!items) {
-    const last = errs.join(" ");
-    if (fatal) die("生图失败（确定性错误，换模型/重试无用，先按诊断修正后再试）：\n  " + errs.join("\n  ") + fatalHint(last));
-    die("生图失败，" + (chain.length > 1 ? "兜底链全部未成" : "已禁用兜底") + "：\n  " + errs.join("\n  ") + upstreamHint(last));
+    const paths = [];
+    let sub = 0;
+    for (const it of r.items) {
+      const dest = join(dir, "keyframe_" + batchTs + "_" + pad(index) + (r.items.length > 1 ? "_" + sub : "") + ".png");
+      const b64 = imgItemB64(it);
+      if (b64) writeFileSync(dest, Buffer.from(b64, "base64"));
+      else if (it.url) await download(it.url, dest);
+      else continue;
+      paths.push(dest); sub++;
+    }
+    if (!paths.length) { log("  [" + (index + 1) + "/" + total + "] FAIL 响应无图片数据（" + r.model.id + "）"); return { index, ok: false, errs: ["响应无图片数据 (" + r.model.id + ")"], fatal: false }; }
+    log("  [" + (index + 1) + "/" + total + "] OK " + r.model.id + " (" + r.spec + ")" + (r.fellBack ? " ←兜底" : "") + " → " + paths.map(basename).join(", "));
+    return { index, ok: true, model: r.model, paths };
+   } catch (e) { // 存盘/下载异常兜底：单张出错不炸整批
+     log("  [" + (index + 1) + "/" + total + "] FAIL 保存异常：" + (e && e.message || e));
+     return { index, ok: false, errs: ["保存异常: " + (e && e.message || e)], fatal: false };
+   }
+  });
+
+  const okResults = results.filter((r) => r && r.ok);
+  const failResults = results.filter((r) => r && !r.ok);
+  const savedPaths = okResults.flatMap((r) => r.paths);
+
+  if (!okResults.length) {
+    const allErrs = failResults.flatMap((r) => r.errs).filter(Boolean);
+    const last = allErrs.join(" ");
+    if (failResults.some((r) => r.fatal)) die("生图全败（含确定性错误，换模型/重试无用，先按诊断修正后再试）：\n  " + allErrs.join("\n  ") + fatalHint(last));
+    die("生图全败，" + (chain.length > 1 ? "兜底链全部未成" : "已禁用兜底") + "：\n  " + allErrs.join("\n  ") + upstreamHint(last));
   }
 
-  let i = 0;
-  for (const it of items) {
-    const dest = join(dir, "keyframe_" + Date.now() + "_" + i + ".png");
-    const b64 = imgItemB64(it);
-    if (b64) writeFileSync(dest, Buffer.from(b64, "base64"));
-    else if (it.url) await download(it.url, dest);
-    else continue;
-    i++;
-    log("[DONE] 图片已保存: " + dest);
+  log("[DONE] 成功 " + okResults.length + "/" + total + " 张，峰值并发 " + peak + "，保存于 " + dir);
+  for (const p of savedPaths) log("  " + p);
+  if (failResults.length) {
+    log("[部分失败] " + failResults.length + " 张未成：");
+    for (const r of failResults) log("  #" + (r.index + 1) + " " + r.errs.join(" | "));
+    const last = failResults.flatMap((r) => r.errs).join(" ");
+    if (failResults.some((r) => r.fatal)) log(fatalHint(last)); else log(upstreamHint(last));
   }
-  if (!i) die("响应中没有图片数据（模型 " + used.id + "）");
-  if (used.id !== "gemini-3-pro-image") log("[提示] 对画面/参考还原不满意？加 --model gemini（pro 模型，一致性更强）重试。");
+  if (!okResults.some((r) => r.model.id === "gemini-3-pro-image")) log("[提示] 对画面/参考还原不满意？加 --model gemini（pro 模型，一致性更强）重试。");
 }
 // ---------- concat (ffmpeg) ----------
 function cmdConcat(cfg, args) {
@@ -747,7 +812,8 @@ const cfg = loadConfig();
     "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
-    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini] [--resolution 1K|2K|4K] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
+    '  生图:  node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model 4k|gemini] [--resolution 1K|2K|4K] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
+    "          多张并发：重复 --prompt 出多张不同图，或 --n 每个提示词出几张；总量 = 提示词数 × n，用并发池并行跑（默认并发 3、上限 10）",
     "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；失败自动兜底 gemini（chat 端点·支持 4K，--resolution 调档，一致性最强）；不满意可 --model gemini 重试",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape|action] [--fps N] [--no-depth] [--out 目录]",

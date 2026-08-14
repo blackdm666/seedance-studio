@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// seedance-studio CLI — 88api.ai Seedance 2.5 video + gpt-image-2 / gpt-image-2-4k keyframes
+// seedance-studio CLI — 88api.ai Seedance 2.5 video + gpt-image keyframes（默认 gpt-image-2；gpt-image-2-4k 仅在 --model 显式请求时调用）
 // Zero-dependency Node 18+. Config: ~/.seedance-studio/config.json
 import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -16,7 +16,7 @@ const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const DEFAULTS = {
   baseUrl: "https://88api.ai",
   videoModel: "seedance2.5满血版",
-  imageModel: "gpt-image-2-4k",
+  imageModel: "gpt-image-2",
   pollIntervalMs: 12000,
   pollTimeoutMs: 25 * 60 * 1000,
 };
@@ -27,21 +27,22 @@ const IMG_ASPECTS_4K = { "1:1":"2880x2880","3:2":"3520x2352","2:3":"2352x3520","
 const IMAGE_MAX_EDGE = 3840;
 // 生图模型预设（gpt-image 家族，全部走 /v1/images/*；2026-08 实测）
 const IMG_MODELS = {
-  "gpt-image-2-4k":  { id: "gpt-image-2-4k",  kind: "images", scale: "4k", note: "高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）。注意：88api 侧该模型渠道时有时无，断渠道时自动兜底 gpt-image-2" },
-  "gpt-image-2":     { id: "gpt-image-2",     kind: "images", scale: "2k", note: "稳定 2K 档（16:9≈2048×1152、2:3=1360×2048，返回 URL；OpenAI 上游）；gpt-image-2-4k 断渠道时的兜底主力，出图稳、支持 --ref 垫图/锁角色" },
+  "gpt-image-2":     { id: "gpt-image-2",     kind: "images", scale: "2k", note: "默认模型·稳定 2K 档（16:9≈2048×1152、2:3=1360×2048，返回 URL；OpenAI 上游）；出图稳、支持 --ref 垫图/锁角色；网关侧对该模型自带兜底，插件不再自建兜底" },
+  "gpt-image-2-4k":  { id: "gpt-image-2-4k",  kind: "images", scale: "4k", note: "高清档（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）。仅在 --model 4k/gpt-image-2-4k 显式请求时调用；88api 侧该渠道时有时无，断渠道会直接报错（不自动回退）" },
 };
 // 友好别名 → 预设键
 const IMG_ALIASES = {
-  "4k":"gpt-image-2-4k","gpt":"gpt-image-2-4k","gpt-4k":"gpt-image-2-4k","gpt-image-2-4k":"gpt-image-2-4k","default":"gpt-image-2-4k",
+  "4k":"gpt-image-2-4k","gpt-4k":"gpt-image-2-4k","gpt-image-2-4k":"gpt-image-2-4k",
+  "default":"gpt-image-2","gpt":"gpt-image-2",
   "2":"gpt-image-2","image2":"gpt-image-2","gpt2":"gpt-image-2","gpt-2":"gpt-image-2","gpt-image-2":"gpt-image-2",
 };
-// 主模型失败时的自动兜底：gpt-image-2-4k 渠道挂 → 退到同上游 gpt-image-2（仍是 image2 质量，避免默认链路白跑到无图可用）
-const IMG_FALLBACKS = ["gpt-image-2"];
+// 不自建兜底：默认就是 gpt-image-2，newapi 网关对 image2 已自带兜底；显式 --model 4k 时也不回退（4k 渠道断则直接报错，交由用户决定）
+const IMG_FALLBACKS = [];
 // 并发（抄 88api-image-gen：MAX_CONCURRENCY=10、DEFAULTS.concurrency=3）；单 key 默认保守，别把上游打熔断
 const IMG_MAX_CONCURRENCY = 10;
 const IMG_DEFAULT_CONCURRENCY = 3;
 function resolveImgModel(name) {
-  if (!name) return IMG_MODELS["gpt-image-2-4k"];
+  if (!name) return IMG_MODELS["gpt-image-2"];
   const key = IMG_ALIASES[String(name).toLowerCase()];
   if (key) return IMG_MODELS[key];
   const id = String(name);
@@ -106,9 +107,9 @@ const CAPS = [
   "硬约束（插件已前置校验）：",
   "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
   "生图（关键帧/锚定图，纯 gpt-image 家族，2026-08 实测）：",
-  "  • 默认 gpt-image-2-4k（OpenAI 上游，/v1/images）：16:9 出真 4K UHD 3840×2160；方图约 2880²（返回 URL）。注意：88api 侧该模型渠道时有时无",
-  "  • gpt-image-2（`--model gpt-image-2` / 别名 image2）：稳定 2K 档（16:9≈2048×1152、2:3=1360×2048），出图稳、支持 --ref；gpt-image-2-4k 断渠道时的兜底主力",
-  "  • 自动兜底链：gpt-image-2-4k 失败 → gpt-image-2（同上游备用模型，`--no-fallback` 关闭）；按错误分类分流：确定性错误(401/审核/模型名)立即停并诊断，熔断/容量即时换模型，瞬时抖动同模型先重试 1 次",
+  "  • 默认 gpt-image-2（OpenAI 上游，/v1/images）：稳定 2K 档（16:9≈2048×1152、2:3=1360×2048），出图稳、支持 --ref；不写 --model 即用它。网关侧对 image2 自带兜底，插件不再自建兜底链。",
+  "  • gpt-image-2-4k（`--model 4k` / `--model gpt-image-2-4k` 显式请求）：16:9 出真 4K UHD 3840×2160；方图约 2880²（返回 URL）。88api 侧该渠道时有时无，断渠道直接报错、不自动回退。",
+  "  • 错误分类分流：确定性错误(401/审核/模型名/400)立即停并诊断；上游熔断/容量/瞬时抖动(fetch failed/timeout/502/504)同模型快速重试 1 次，再不行报错交用户决定。",
   "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——走 /v1/images/edits；功能三保产品/人物一致性首选",
 ];
 
@@ -127,8 +128,8 @@ function mask(k) { return !k ? "(not set)" : k.slice(0, 6) + "..." + k.slice(-4)
 function die(msg) { const e = new Error(msg); e.isDie = true; throw e; }
 // 生图错误分类（关键词集合沿用参考插件 88api-image-gen 的 isRetryable/isFatal 口径）：
 //   fatal      = 确定性错误（换模型/重试都无用）→ 立即停、诊断
-//   capacity   = 上游熔断/容量耗尽 → 直接跨上游兜底（同模型重试等不到恢复）
-//   transient  = 瞬时网络抖动 → 同模型快速重试 1 次，再不行才跨上游
+//   capacity   = 上游熔断/容量耗尽 → 报错（默认 image2 由网关侧兜底；显式 4k 断渠道交用户决定）
+//   transient  = 瞬时网络抖动 → 同模型快速重试 1 次，再不行报错
 function classifyImgError(msg) {
   const s = String(msg || "").toLowerCase();
   if (/circuit breaker|temporarily suspended|no active tokens|no available (channel|account)|account pool busy|可用渠道不存在/.test(s)) return "capacity";
@@ -136,7 +137,7 @@ function classifyImgError(msg) {
   if (/http 429|http 502|http 503|http 504|http 524|timeout|rate limit|too many requests|please retry later|temporarily unavailable|overloaded|fetch failed|socket hang up|econnreset|terminated|did not contain|无图片数据|未返回图片/.test(s)) return "transient";
   return "unknown";
 }
-// 上游熔断/容量类 → 干净的一句诊断（不再解析/显示 "约 N 秒自动恢复"，因兜底已即时旁路该等待）
+// 上游熔断/容量类 → 干净的一句诊断（默认 image2 由网关侧兜底，插件不自建兜底链）
 function upstreamHint(msg) {
   const s = String(msg || "");
   if (/circuit breaker|temporarily suspended|no active tokens|no available (channel|account)|可用渠道不存在|503|no available channel/i.test(s))
@@ -408,7 +409,7 @@ async function runImagePool(total, concurrency, runTask) {
   await Promise.all(Array.from({ length: limit }, () => dispatcher()));
   return { results, peak, limit };
 }
-// 单张生成流水线：主模型 → 跨上游兜底链，含错误分类（确定性停链 / 瞬时同模型重试 1 次 / 容量换上游）。返回 1 张的原始 item。
+// 单张生成流水线：按模型链尝试（默认仅主模型，不自建兜底），含错误分类（确定性停链 / 瞬时同模型重试 1 次 / 容量报错）。返回 1 张的原始 item。
 async function generateOneImage(cfg, slot) {
   const { prompt, aspect, refs, chain } = slot;
   const errs = [];
@@ -464,7 +465,7 @@ async function cmdImage(cfg, args) {
   const lanes = Math.min(concurrency, total);
 
   if (args["dry-run"]) {
-    log("[DRY-RUN] 生图 " + total + " 张（" + prompts.length + " 提示词 × " + n + "）· 并发 " + lanes + " · 兜底链 " + chain.join(" → "));
+    log("[DRY-RUN] 生图 " + total + " 张（" + prompts.length + " 提示词 × " + n + "）· 并发 " + lanes + " · 模型 " + chain.join(" → "));
     for (const id of chain) {
       const m = IMG_MODELS[id] || resolveImgModel(id);
       const size = imgSize(aspect, m.scale);
@@ -476,8 +477,8 @@ async function cmdImage(cfg, args) {
 
   const primarySpec = imgSize(aspect, primary.scale);
   const submit = refs.length ? "参考图生图 " + total + " 张 ←垫图 " + refs.length + " 张" : "生图 " + total + " 张 " + primarySpec;
-  log("[submit] " + submit + "（" + prompts.length + " 提示词 × " + n + "，并发 " + lanes + "）· 主模型 " + primary.id
-    + (noFallback ? "（--no-fallback，无兜底）" : " → 兜底 " + chain.slice(1).join("/")) + " · " + endpointOf(primary.id));
+  log("[submit] " + submit + "（" + prompts.length + " 提示词 × " + n + "，并发 " + lanes + "）· 模型 " + primary.id
+    + (chain.length > 1 ? " → 兜底 " + chain.slice(1).join("/") : "（网关自带兜底，插件不再自建）") + " · " + endpointOf(primary.id));
 
   const batchTs = Date.now();
   const pad = (x) => String(x).padStart(2, "0");
@@ -517,7 +518,7 @@ async function cmdImage(cfg, args) {
     const allErrs = failResults.flatMap((r) => r.errs).filter(Boolean);
     const last = allErrs.join(" ");
     if (failResults.some((r) => r.fatal)) die("生图全败（含确定性错误，换模型/重试无用，先按诊断修正后再试）：\n  " + allErrs.join("\n  ") + fatalHint(last));
-    die("生图全败，" + (chain.length > 1 ? "兜底链全部未成" : "已禁用兜底") + "：\n  " + allErrs.join("\n  ") + upstreamHint(last));
+    die("生图全败" + (chain.length > 1 ? "（兜底链全部未成）" : "") + "：\n  " + allErrs.join("\n  ") + upstreamHint(last));
   }
 
   log("[DONE] 成功 " + okResults.length + "/" + total + " 张，峰值并发 " + peak + "，保存于 " + dir);
@@ -771,9 +772,9 @@ const cfg = loadConfig();
     "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
-    '  生图:  node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model 4k|gpt-image-2] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
+    '  生图:  node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model gpt-image-2-4k] [--ref 参考图 ...] [--dry-run]',
     "          多张并发：重复 --prompt 出多张不同图，或 --n 每个提示词出几张；总量 = 提示词数 × n，用并发池并行跑（默认并发 3、上限 10）",
-    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；断渠道自动兜底 gpt-image-2(稳定 2K)；均走 /v1/images，支持 --ref 垫图锁角色",
+    "          默认 gpt-image-2(稳定 2K，网关自带兜底)；要更高清加 --model gpt-image-2-4k(16:9 真 4K UHD，断渠道直接报错)；均走 /v1/images，支持 --ref 垫图锁角色",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape|action] [--fps N] [--no-depth] [--out 目录]",
     "          题材自适应：character=真深度读人物动作/前后景；landscape=运动热图+原帧光色、跳深度(--with-depth 强开)；action=多人骨架(YOLO-pose)+运动+深度读武打连招(--no-pose 关骨架)；auto=都出自己挑。所有模式都出 motion_heat 读运镜"].join("\n"));

@@ -8,7 +8,8 @@ Create a compact map before prompt prose:
 
 | Dimension | Possible owner |
 |---|---|
-| Identity and costume | image or canonical character sheet |
+| Identity | authorized source photo or generated canonical character sheet—exactly one authority |
+| Costume | keyframe image or text plan; it must not override identity |
 | First/final visual state | first/last-frame image |
 | Motion/blocking | video |
 | Camera path and pacing | video or text plan |
@@ -19,6 +20,16 @@ Create a compact map before prompt prose:
 | Style/material treatment | image or text art direction |
 
 No dimension may have two owners. One asset may own several compatible dimensions. Remove any asset that owns nothing.
+
+## Authorized real-person identity
+
+When the user separately provides a person photo and explicitly asks to use that person:
+
+- Keep the source photo as the sole identity authority and pass it directly to every paid video request with `--identity-image`.
+- Generate every face-bearing keyframe directly from the same source with `--identity-ref`; do not use an AI keyframe as the only parent of another face image.
+- Let first/last frames own composition, costume, lighting, and endpoint only. In the prompt state that their faces must yield to the authorized identity photo.
+- Run `--dry-run` and require `IDENTITY-AUDIT mode=authorized-direct`. Missing source identity is a blocking preflight failure.
+- Do not infer authorization from a face appearing in the reference video. This branch requires a separately supplied photo plus an explicit “use this person” instruction.
 
 ## Reference declaration pattern
 
@@ -31,7 +42,7 @@ Preserve every `@` tag byte-for-byte. Never translate, renumber, respell, or sil
 - Prefer 1–5 clear video/audio subjects and 1–8 image subjects even though 2.5 accepts more.
 - Use clean silhouettes, uncluttered motion, and a stable camera for motion donors.
 - Prefer separate images for different views instead of one dense multi-view collage when many subjects are involved.
-- Keep the identity reference visually unambiguous: one character, readable face, consistent costume, no competing look-alikes.
+- Keep the identity reference visually unambiguous: one character, readable face, no mirror duplicate or competing look-alike. For authorized identity, preserve the raw source as authority instead of replacing it with an AI portrait.
 - Mute a video donor when its audio should not own timing.
 
 ## 2.5 reference workflows

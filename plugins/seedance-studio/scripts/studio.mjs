@@ -20,6 +20,12 @@ const DEFAULTS = {
   pollIntervalMs: 12000,
   pollTimeoutMs: 25 * 60 * 1000,
 };
+const AUTH_IDENTITY_VIDEO_LOCK = "【授权真人身份唯一基准】第一张普通参考图（不含首帧/尾帧）是用户明确授权使用的真人身份照片，只控制人物的脸、五官比例、发型、肤色、体型与稳定可见特征。首帧、尾帧及其它 AI 关键帧只控制场景、服装、构图和状态，不得改写人物身份；发生冲突时一律以该真人身份图为准。不要迁移身份图中的背景、镜面重复人物、文字、Logo 或无关物品。保留真实面部不对称、自然皮肤纹理与拍摄质感，禁止标准化美化和换脸。";
+const AUTH_IDENTITY_IMAGE_LOCK = "【授权真人身份唯一基准】第一张参考图是用户明确授权使用的真人身份照片，只控制人物的脸、五官比例、发型、肤色、体型与稳定可见特征。其它参考图只控制场景、服装、构图或风格，不得改写身份；发生冲突时一律以第一张身份图为准。保留真实面部不对称、自然皮肤纹理与拍摄质感，禁止标准化美化和换脸。";
+function withIdentityLock(prompt, lock) {
+  const s = String(prompt || "");
+  return s.includes("【授权真人身份唯一基准】") ? s : lock + "\n\n" + s;
+}
 const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 // 尺寸表与参考插件 88api-image-gen 的 SIZE_MATRIX 完全一致（后端最长边上限 IMAGE_MAX_EDGE=3840，4K 档不是把 2K 翻倍）
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
@@ -223,17 +229,27 @@ async function downloadBuf(url) {
 
 // ---------- video ----------
 function buildVideoPayload(cfg, args) {
-  const prompt = args.prompt ? String(args.prompt) : "";
+  let prompt = args.prompt ? String(args.prompt) : "";
   const duration = args.duration ? parseInt(args.duration, 10) : 10;
   if (!(duration >= 4 && duration <= 30)) die("duration 必须在 4–30 秒之间，当前: " + args.duration);
   const ratio = String(args.ratio || "16:9");
   if (!RATIOS.includes(ratio)) die("ratio 仅支持: " + RATIOS.join(", "));
-  const images = asArray(args.image);
+  const identityImages = asArray(args["identity-image"]).map(String);
+  const regularImages = asArray(args.image).map(String);
+  if (identityImages.length > 1) die("--identity-image 当前只允许 1 张授权真人身份图，避免多个身份权威互相冲突");
+  if (identityImages.length) {
+    const identityKey = /^https?:\/\//.test(identityImages[0]) ? identityImages[0] : resolve(identityImages[0]).toLowerCase();
+    const duplicated = regularImages.some((p) => (/^https?:\/\//.test(p) ? p : resolve(p).toLowerCase()) === identityKey);
+    if (duplicated) die("授权真人身份图不要同时作为 --identity-image 和 --image 重复提交");
+    if (!/^https?:\/\//.test(identityImages[0]) && !existsSync(resolve(identityImages[0]))) die("授权真人身份图不存在: " + identityImages[0]);
+    prompt = withIdentityLock(prompt, AUTH_IDENTITY_VIDEO_LOCK);
+  }
+  const images = [...identityImages, ...regularImages];
   const videoUrls = asArray(args["video-url"]);
   const audioUrls = asArray(args["audio-url"]);
   const firstFrame = args["first-frame"] ? String(args["first-frame"]) : "";
   const lastFrame = args["last-frame"] ? String(args["last-frame"]) : "";
-  if (images.length > 30) die("图片参考最多 30 张");
+  if (images.length > 30) die("图片参考最多 30 张（含 --identity-image）");
   if (videoUrls.length > 10) die("视频参考最多 10 个");
   if (audioUrls.length > 10) die("音频参考最多 10 个");
   for (const u of [...videoUrls, ...audioUrls]) {
@@ -316,9 +332,13 @@ async function pollTask(cfg, taskId, dir) {
 async function cmdVideo(cfg, args) {
   const payload = buildVideoPayload(cfg, args);
   const dir = outDir(args);
+  const identitySources = asArray(args["identity-image"]).map(String).map((p) => /^https?:\/\//.test(p) ? p : resolve(p));
+  const identityAudit = identitySources.length ? { mode: "authorized-direct", authority: "source-photo", sources: identitySources } : { mode: "generated-or-unspecified", sources: [] };
+  if (identitySources.length) log("[IDENTITY] 授权真人原图已作为唯一身份权威直接附加；AI 首尾帧不得改写身份");
   if (args["dry-run"]) {
     log("[DRY-RUN] 不会调用付费接口。将提交:");
     log("POST " + cfg.baseUrl + "/v1/videos");
+    log("[IDENTITY-AUDIT] " + JSON.stringify(identityAudit));
     log(JSON.stringify(sanitizePayload(payload), null, 2));
     log("[估算] " + payload.duration + " 秒视频（按秒计费，以 88api 后台价格为准）");
     return;
@@ -329,11 +349,12 @@ async function cmdVideo(cfg, args) {
     die("输出目录已有任务 " + prev.taskId + "（防重复提交）。续查:\n  node studio.mjs status --task " + prev.taskId + ' --wait --out "' + dir + '"\n或换一个 --out 目录。');
   }
   const frameNote = payload.content ? (payload.content.some(c => c.role === "first_frame") ? ", first_frame" : "") + (payload.content.some(c => c.role === "last_frame") ? ", last_frame" : "") : "";
-  log("[submit] POST /v1/videos (" + payload.duration + "s, " + payload.ratio + ", audio=" + payload.generate_audio + frameNote + ")");
+  const identityNote = identitySources.length ? ", identity=authorized-direct" : "";
+  log("[submit] POST /v1/videos (" + payload.duration + "s, " + payload.ratio + ", audio=" + payload.generate_audio + frameNote + identityNote + ")");
   const task = await api(cfg, "POST", "/v1/videos", payload);
   const taskId = task.id || task.task_id;
   if (!taskId) die("提交响应中无任务 ID: " + JSON.stringify(task).slice(0, 400));
-  writeFileSync(runFile, JSON.stringify({ taskId, submittedAt: new Date().toISOString(), payload: sanitizePayload(payload) }, null, 2));
+  writeFileSync(runFile, JSON.stringify({ taskId, submittedAt: new Date().toISOString(), identityAudit, payload: sanitizePayload(payload) }, null, 2));
   log("[task] " + taskId + " (status=" + task.status + ")");
   if (args["no-wait"]) { log("稍后查询: node studio.mjs status --task " + taskId + ' --wait --out "' + dir + '"'); return; }
   await pollTask(cfg, taskId, dir);
@@ -448,8 +469,8 @@ async function generateOneImage(cfg, slot) {
   return { ok: false, errs, fatal };
 }
 async function cmdImage(cfg, args) {
-  const prompts = asArray(args.prompt).map(String).map((s) => s.trim()).filter(Boolean);
-  if (!prompts.length) die("需要 --prompt（可重复 --prompt 出多张不同图，并发跑）");
+  const rawPrompts = asArray(args.prompt).map(String).map((s) => s.trim()).filter(Boolean);
+  if (!rawPrompts.length) die("需要 --prompt（可重复 --prompt 出多张不同图，并发跑）");
   const aspect = String(args.aspect || "16:9");
   const primary = resolveImgModel(args.model);
   if (!imgAspectOk(primary.id, aspect)) {
@@ -459,9 +480,17 @@ async function cmdImage(cfg, args) {
   if (!(n >= 1 && n <= 4)) die("--n 限 1–4（每个 --prompt 出几张）");
   const concurrency = args.concurrency ? parseInt(args.concurrency, 10) : IMG_DEFAULT_CONCURRENCY;
   if (!(concurrency >= 1 && concurrency <= IMG_MAX_CONCURRENCY)) die("--concurrency 限 1–" + IMG_MAX_CONCURRENCY);
-  // 参考图（垫图/锁角色/锁产品）：任意个 --ref，走 /v1/images/edits
-  const refs = [].concat(args.ref || []).filter(Boolean).map(String);
+  // 授权真人身份图必须保持为第一张参考；普通 --ref 只控制场景/服装/产品等其它维度。
+  const identityRefs = asArray(args["identity-ref"]).map(String);
+  if (identityRefs.length > 1) die("--identity-ref 当前只允许 1 张授权真人身份图，避免多个身份权威互相冲突");
+  const regularRefs = [].concat(args.ref || []).filter(Boolean).map(String);
+  if (identityRefs.length) {
+    const identityKey = resolve(identityRefs[0]).toLowerCase();
+    if (regularRefs.some((p) => resolve(p).toLowerCase() === identityKey)) die("授权真人身份图不要同时作为 --identity-ref 和 --ref 重复提交");
+  }
+  const refs = [...identityRefs, ...regularRefs];
   for (const r of refs) if (!existsSync(resolve(r))) die("参考图不存在: " + r);
+  const prompts = identityRefs.length ? rawPrompts.map((p) => withIdentityLock(p, AUTH_IDENTITY_IMAGE_LOCK)) : rawPrompts;
   const dir = outDir(args);
   const noFallback = !!args["no-fallback"];
   // 兜底链：主模型 + 跨上游兜底（去重、去掉与主模型同款）。--no-fallback 只留主模型。
@@ -477,6 +506,7 @@ async function cmdImage(cfg, args) {
   const lanes = Math.min(concurrency, total);
 
   if (args["dry-run"]) {
+    if (identityRefs.length) log("[IDENTITY] 授权真人原图已作为第一张生图参考直接附加；禁止锚定图套锚定图替代身份");
     log("[DRY-RUN] 生图 " + total + " 张（" + prompts.length + " 提示词 × " + n + "）· 并发 " + lanes + " · 模型 " + chain.join(" → "));
     for (const id of chain) {
       const m = IMG_MODELS[id] || resolveImgModel(id);
@@ -488,6 +518,7 @@ async function cmdImage(cfg, args) {
   }
 
   const primarySpec = imgSize(aspect, primary.scale);
+  if (identityRefs.length) log("[IDENTITY] 授权真人原图已作为第一张生图参考直接附加；输出关键帧不得取代身份权威");
   const submit = refs.length ? "参考图生图 " + total + " 张 ←垫图 " + refs.length + " 张" : "生图 " + total + " 张 " + primarySpec;
   log("[submit] " + submit + "（" + prompts.length + " 提示词 × " + n + "，并发 " + lanes + "）· 模型 " + primary.id
     + (chain.length > 1 ? " → 兜底 " + chain.slice(1).join("/") : "（网关自带兜底，插件不再自建）") + " · " + endpointOf(primary.id));
@@ -821,7 +852,7 @@ async function cmdAudio(cfg, args) {
     log("[usage] total=" + json.usage.total_tokens + (d.audio_tokens != null ? " (audio=" + d.audio_tokens + ")" : ""));
   }
   log("[DONE] 已保存: " + outMd);
-  log("[audio] 合规：BGM 只描述不提取原曲（版权）；转写仅用于反推分析，人物复刻一律新身份（见 reverse.md / replicate.md）。");
+  log("[audio] 合规：BGM 只描述不提取原曲（版权）；转写仅用于反推分析。原片演员不复用，用户另行提供的授权人物按身份直传分支处理（见 reverse.md / replicate.md）。");
 }
 // ---------- meta ----------
 async function cmdSelfTest(cfg) {
@@ -864,10 +895,10 @@ const cfg = loadConfig();
     '  配置:  node studio.mjs --set-key "sk-..."   |  --get-config  |  --self-test  |  --caps',
     '  生视频: node studio.mjs video --prompt "..." [--duration 4-30] [--ratio 16:9]',
     "          [--first-frame 图] [--last-frame 图]（图生视频：片头随首帧/片尾随尾帧）",
-    "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
+    "          [--identity-image 授权真人图] [--image 场景/产品图 ...合计最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
-    '  生图:  node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model gpt-image-2-4k] [--ref 参考图 ...] [--dry-run]',
+    '  生图:  node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model gpt-image-2-4k] [--identity-ref 授权真人图] [--ref 场景/产品图 ...] [--dry-run]',
     "          多张并发：重复 --prompt 出多张不同图，或 --n 每个提示词出几张；总量 = 提示词数 × n，用并发池并行跑（默认并发 3、上限 10）",
     "          默认 gpt-image-2(稳定 2K，网关自带兜底)；要更高清加 --model gpt-image-2-4k(16:9 真 4K UHD，断渠道直接报错)；均走 /v1/images，支持 --ref 垫图锁角色",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",

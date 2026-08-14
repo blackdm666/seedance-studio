@@ -97,7 +97,7 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --mode auto --o
 参数：`--mode auto|character|landscape|action`、`--fps`（character 4 / landscape 2 / action 8）、`--colormap all|gray|magma|turbo`、`--model`（深度模型，默认 Depth-Anything-V2-Small-hf，CPU 约 0.6s/帧）、`--py`（指定 python）、`--with-depth`（landscape 下强开深度）、`--no-depth`（任意模式跳深度提速）、`--no-pose` / `--pose-model`（action 骨架）。
 
 > **降级**：无 Python/torch 时，character/auto/action 自动跳过真深度、仅出 ffmpeg 运动 pass（motion_edge + motion_heat）；无 ultralytics/opencv 时 action 跳过骨架、仍用 edge（轮廓读姿态）+ heat（轨迹）。装真深度：`pip install transformers timm pillow torch`；装骨架：`pip install ultralytics opencv-python`（均 CPU 版即可）。
-> **合规**：运动理解产物仅用于**理解运动与光色**，绝不把原片人物抽帧/抽脸复用——复刻阶段人物一律用 gpt-image-2 / gpt-image-2-4k 生成新身份（见 replicate.md）。
+> **合规**：运动理解产物仅用于理解运动与光色，绝不把原片人物抽帧/抽脸复用。原片演员生成新身份；若用户另行提供并明确指定替换人物，则使用该授权原照片作为唯一身份权威（见 replicate.md）。
 
 ## ④ 运镜判定（Claude 亲眼读 ②③ 帧）
 
@@ -129,7 +129,7 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --mode auto --o
 
 ## ⑥ 最终提示词（Claude）
 
-**⚠️ 主角先行（强制）**：若反推识别到**反复出现的核心人物/产品**（贯穿全片的主角即属此列），**出片前必须先 `image` 生成一张合规「新身份」锚定图**（`gpt-image-2-4k`／`gpt-image-2`，先 `--dry-run` 再真出），再用 `--ref` 锁脸/锁形贯穿全片——**绝不从原片抽帧/抽脸复用**（肖像权）。多形象（如仙侠×飞行员同一张脸）先出 1 张主锚定图，再拿它当 `--ref` 出其余形象保持同脸。
+**⚠️ 主角先行（强制）**：若反推识别到反复出现的核心人物/产品，先判身份来源。原片演员不得复用，生成合规新身份锚定图；用户另行提供并明确说“用这个人”时，原照片是唯一身份权威，每张关键帧用 `--identity-ref` 直接参考，视频用 `--identity-image` 继续直传，禁止 AI 锚定图套 AI 锚定图替代身份。
 
 先列参考图上传顺序与各自职责（用户已提供、或上面新生成的锚定图），再输出一份可直接复制的四层提示词：
 
@@ -146,7 +146,7 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --mode auto --o
 
 **⚠️ 先审核后落库（强制）**：反推出的最终提示词**必须先在对话里完整展示给用户审核**——把四层提示词与分镜表逐段贴出、说明每张参考图职责、标注不确定项（机型/台词/音效等），等用户确认或修订后**才**写入 `prompts/*.txt`、才进入出片。**严禁在用户看到并确认前"直接落库"或直接调 `image`/`video` 出片**——用户往往要改机型（如把"隐身战机"定为具体型号）、改台词、改节奏。展示时可同时给"整段版"和"分段版"两种供用户选。落库后若用户再修订，同步覆盖 `prompts/*.txt`，不留过期版本。
 
-分镜时间用整数。交付前逐项核对：钩子每个成分已写入、**运镜与④的判定一致**、动作方向与帧一致、每个音效有证据、每张参考图只有一个职责、**有反复出现的人物/产品时已先生成合规新身份锚定图并 `--ref` 绑定**、**最终提示词已在对话展示并获用户确认后才落库**。
+分镜时间用整数。交付前逐项核对：钩子每个成分已写入、运镜与④一致、动作方向与帧一致、每个音效有证据、每张参考图只有一个职责、人物已按身份路由正确绑定、授权真人 dry-run 已出现 `mode:"authorized-direct"`、最终提示词已在对话展示并获用户确认后才落库。
 
 ## ⑦ 音频拆解（audio 子命令：人声转写 + BGM描述 + 音效时间轴）
 
@@ -175,5 +175,5 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" audio --video "<视频>" --out "<project
 ## 收尾：直接复刻或转工程包
 
 用户确认提示词后：
-- **直接出片**：**先按上面「主角先行」生成合规新身份锚定图**，再回到 SKILL.md 出片流程，用 `--image`/`--ref` 绑定并声明"外观以 @锚定图 为唯一基准"。原片超 30 秒按叙事段落拆分多次生成，最后 `concat` 拼接。
+- **直接出片**：按“主角先行”分支执行。原片演员用新身份锚定图；授权替换人物的每张关键帧用 `--identity-ref`，视频继续用 `--identity-image`，并以 dry-run 身份审计为提交门槛。原片超 30 秒按叙事段落拆分，最后 `concat`。
 - **要可复刻工程包**（补素材、合规新身份、逐段绑定）：转 [replicate.md](replicate.md)。

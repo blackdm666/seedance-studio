@@ -8,7 +8,8 @@ Classify the failure as identity, reference conflict, action density, timing, ca
 
 | Symptom | Likely cause | First repair |
 |---|---|---|
-| Generic AI-looking face | Vague beauty terms, no skin/landmark detail | Use the character realism formula: age, texture, 3–4 landmarks, gaze, hair, garment material, build |
+| Generic AI-looking face | Authorized source photo was omitted; identity passed through one or more AI-generated anchors; or vague beauty terms | Inspect `run.json` first. If the user supplied the person, require `identityAudit.mode=authorized-direct`, regenerate every face keyframe directly with `--identity-ref`, and submit the source again with `--identity-image`; do not solve this by increasing resolution |
+| Face is stable but obviously synthetic | AI-anchor → AI-anchor → video re-render chain has standardized skin and facial geometry | Rewrite the identity reference chain; same-prompt re-roll and post sharpening will not repair it |
 | Several people look alike | Shared description or unclear identity owners | Give each person a separate reference/paragraph, fixed clothing, role, position, voice, and `不串脸` lock |
 | Identity drifts in long video | Too many changes compete with identity | Reduce simultaneous events; repeat identity/costume locks globally and at major scene changes |
 | Reference leakage | One donor controls too many dimensions | Assign one authority per dimension and state what must not transfer |

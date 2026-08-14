@@ -20,7 +20,7 @@
 | （**默认**）`2`/`image2`/`gpt`/`gpt2` | `gpt-image-2` | `/v1/images/generations`（`--ref` 时 `/v1/images/edits` multipart） / **url PNG** | **稳定 2K 档**：16:9≈2048×1152、2:3=1360×2048、方图 2048² | 默认出图主力，不写 `--model` 即用它；出图稳、**支持 `--ref` 垫图/锁角色/锁产品**；newapi 网关对该模型自带兜底 |
 | `4k`/`gpt-image-2-4k`（显式请求） | `gpt-image-2-4k` | `/v1/images/generations` / **url**（Adobe Firefly S3，OpenAI 上游） | **16:9=3840×2160 真 4K UHD**；方图约 2880² | 仅在 `--model 4k`/`gpt-image-2-4k` 显式请求时用（海报级高清）。**88api 侧该渠道时有时无**（断渠道回 `500 … 可用渠道不存在`），**断渠道直接报错、不自动回退** |
 
-- 命令：`node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model gpt-image-2-4k] [--ref 参考图 ...]`
+- 命令：`node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model gpt-image-2-4k] [--identity-ref 授权真人原照片] [--ref 场景/产品参考图 ...]`
 - **批量并发出图**：可重复 `--prompt` 出多张不同图，或 `--n` 每个提示词出几张；**总量 = 提示词数 × n**，交给并发池并行跑（`--concurrency` 默认 3、上限 10）。**并发结构抄自 `88api-image-gen`**（`MAX_CONCURRENCY=10`、默认 `concurrency=3`）：`N` 个 dispatcher 从共享游标拉任务，`Promise.all(Array.from({length:N}, dispatcher))`，跑完一个立刻拉下一个；单 key 场景已裁掉参考插件的多 worker/粘性分组。**每张都是独立单图请求**（不用服务端 `n` 批量），各自独立请求与重试（瞬时抖动同模型快速重试 1 次），单张失败/存盘异常不炸整批；输出文件名 `keyframe_<批次时间戳>_<槽位序号>.png`。默认并发保守（3），是为了别把单 key 的上游打到熔断（429/circuit breaker）；批量越大越要留意上游容量。
 - **默认 `gpt-image-2`**（不写 `--model` 即用它，稳定 2K）。**插件不再自建兜底链**——newapi 网关对 `gpt-image-2` 已自带兜底。要海报级更高清再显式 `--model gpt-image-2-4k`（16:9 真 4K UHD 3840×2160）；但该 4K 渠道在 88api 侧时有时无、断渠道会直接报 `500 … 可用渠道不存在`，**不自动回退**（交用户决定重试或降级回默认 2K）。
 - **两档都走 Images API**（`/v1/images/*`，OpenAI 协议，别再混 chat 端点）：文生图 `POST /v1/images/generations`；带 `--ref` 的垫图/改图 `POST /v1/images/edits`（multipart，字段 `image[]` 可多次）。返回解析兼容 `b64_json`/`base64`/`image.b64_json`/`url`。
@@ -30,6 +30,14 @@
 - **参考图生图（img2img / 垫图）**：任意个 `--ref <本地图>` → `POST /v1/images/edits`（multipart，字段 `image[]` 可多次）。实测：喂一张产品/角色图 + 提示词，能保留主体形态换场景/换光——**功能三保「产品外观/人物身份一致」的首选**（`gpt-image-2` 实测 2MB PNG 垫图稳定）。
 - 尺寸：`gpt-image-2-4k` 用 4K 像素尺寸表（16:9→**3840×2160**、4:3→3264×2448、3:4→2448×3264、1:1→2880²，均 ≤ 后端最长边上限 3840）；`gpt-image-2` 用 2K 像素尺寸表（16:9≈2048×1152、2:3=1360×2048、1:1=2048²）。**尺寸表 = `88api-image-gen` 的 `SIZE_MATRIX`（2K/4K 逐档一致，4K 不是把 2K 翻倍——翻倍会超 3840 最长边被上游拒）**；提示词尾部追加"画幅约束"后缀（`请严格按照 W:H … 画幅生成…`）压稳比例；参考图走 multipart `image[]`。
 - 计费按 token（`usage.output_tokens` 的 image_tokens）——**批量出锚定图前先 1 张试方向**。
+
+### 授权真人身份直传
+
+- `image --identity-ref <原照片>`：把原照片固定为第一张参考并自动注入身份唯一基准；普通 `--ref` 只能控制场景、服装、构图或产品。每张含脸关键帧都必须再次传同一原照片，禁止 AI 图套 AI 图替代身份。
+- `video --identity-image <原照片>`：把原照片作为第一张普通 `reference_image` 直接送入 Seedance；首帧/尾帧仍分别使用 `first_frame` / `last_frame` role，但提示词自动声明它们不能改写身份。
+- 两个参数都只接受一个身份权威，并阻止与普通 `--ref` / `--image` 重复提交同一文件。
+- `video --dry-run` 输出 `[IDENTITY-AUDIT]`；真实提交的 `run.json` 记录 `identityAudit.mode="authorized-direct"` 和来源路径，便于确认原图没有在关键帧阶段被丢弃。
+- 这些参数只用于用户有权使用、并明确指定的人物照片；参考视频中的演员不属于此分支。
 
 ## 音频拆解（反推功能⑦：无专用 STT → 走 Gemini 多模态，2026-08 实测）
 
@@ -57,7 +65,7 @@
 - 参考素材两种写法：`images`（图片简写数组）或 `input_reference`（string/string[]，素材 URL 或图片 Data URL）；含视频/音频参考时用多模态 `content[]`：`text` / `image_url`（≤30，**可用 base64 Data URL 传本地图**）/ `video_url`（≤10）/ `audio_url`（≤10）
 - **多模态参考合计 ≤50**（30 图 + 10 视频 + 10 音频）；官方建议**按职责组织**参考：人物 / 产品 / 场景 / 风格 / 运镜(参考视频) / 音乐情绪(参考音频)，并在提示词里逐条声明每个素材只负责哪一维
 - 视频与音频参考必须公网可直连 HTTP(S)，不能依赖 Cookie 或登录态；图床 403 时换对象存储
-- **图生视频（首帧/尾帧）CLI**：`video --first-frame <图> [--last-frame <图>]` → 插件自动走 `content[]` 并给每项打 `role`（`first_frame`/`last_frame`，附带的 `--image` 记为 `reference_image`）。**片头精确从首帧画面开始**（分段拼接必用：让每段起幅 = 事先生成好的关键帧，段间可无缝续接）；ratio 用 `16:9` 与 16:9 关键帧匹配即可。
+- **图生视频（首帧/尾帧）CLI**：`video --first-frame <图> [--last-frame <图>]` → 插件自动走 `content[]` 并给每项打 `role`（`first_frame`/`last_frame`，附带的 `--identity-image` / `--image` 记为 `reference_image`）。用户指定授权真人时必须另加 `--identity-image <原照片>`，不能只提交 AI 首尾帧。**片头精确从首帧画面开始**；ratio 与关键帧匹配。
 
 ## Seedance 2.5 原生能力 vs 88api 透传边界（2026-08 三档实测）
 

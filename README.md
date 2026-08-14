@@ -10,7 +10,7 @@
 |---|---|---|---|
 | **① 想法 → 成片** | 一句话想法 | **自动按规模分级**：T0 单镜直接出（含 15–30 秒 TVC）· T1 多镜短片拆段生成 + `concat` 拼接成一条连续成片 | 单条短片 / TVC 的 MP4 |
 | **② 视频 → 反推** | 一条参考视频 | ffmpeg 抽帧 → 逐帧证据观察 → 结构化还原运镜/动作/文字/声音 | 可直接生成的提示词 |
-| **③ 视频 → 复刻工程包** | 一条参考视频 | ②的全部 + 素材盘点 + 合规新身份锚定图 + 逐段绑定提示词 | 补齐素材即可一键生成的完整工程 |
+| **③ 视频 → 复刻工程包** | 一条参考视频 | ②的全部 + 素材盘点 + 人物身份路由（原片演员新身份 / 授权替换人物原图直传）+ 逐段绑定提示词 | 补齐素材即可一键生成的完整工程 |
 
 > **① 自动分级：T0 一句话直接出，T1 多镜短片只在开拍前跟你确认一次拆段与总计费秒数**——既保住"一句话出片"，又不让你在不知情下烧掉一条长片的钱。**本插件专注单条短片与 TVC，不做多集连续短剧/剧集/电影**：跨集一致性靠喂图会漂、角色配音锁不住、且持续烧钱成本高；遇到连续剧需求，它会帮你先做一条自成一体的样片/预告/TVC，成系列请换专门的制片工具链。
 
@@ -20,6 +20,7 @@
 
 - 🎬 Seedance 2.5 满血版：4–30 秒、720P、同步音频、多模态参考（30 图 / 10 视频 / 10 音频）
 - 🖼 gpt-image-2 生图：关键帧预审、人物/产品/场景锚定图（跨段一致性）
+- 👤 授权人物直传：用户另行提供并指定的人物原图作为唯一身份权威，每张关键帧与视频请求都直接携带，避免 AI 图套 AI 图造成身份漂移和合成感
 - 🔍 反推：ffmpeg 抽帧 + Codex 逐帧观察，零 API 成本，证据优先防幻觉
 - 🧵 拼接：`concat` 命令流复制拼段（异常时 `--reencode`）
 - 🛡 成本安全：dry-run、防重复提交闸、failed 任务 NO-RETRY、拆段方案先确认总计费秒数
@@ -78,8 +79,10 @@ Key 会保存在本机 `~/.seedance-studio/config.json`，配置输出会自动�
 ```powershell
 node plugins/seedance-studio/scripts/studio.mjs video --prompt "雨夜东京街头，银色跑车驶过，霓虹倒影，电影级跟拍" --duration 10 --ratio 16:9
 node plugins/seedance-studio/scripts/studio.mjs video --prompt "..." --image product.jpg --duration 8 --dry-run
+node plugins/seedance-studio/scripts/studio.mjs video --prompt "..." --identity-image person.jpg --first-frame opening.png --duration 8 --dry-run
 node plugins/seedance-studio/scripts/studio.mjs status --task task_xxx --wait
 node plugins/seedance-studio/scripts/studio.mjs image --prompt "产品关键帧…" --aspect 16:9
+node plugins/seedance-studio/scripts/studio.mjs image --prompt "人物关键帧…" --identity-ref person.jpg --ref scene.jpg --aspect 16:9 --dry-run
 node plugins/seedance-studio/scripts/studio.mjs concat --dir seedance-projects/demo/segments --out final.mp4
 ```
 
@@ -87,7 +90,7 @@ node plugins/seedance-studio/scripts/studio.mjs concat --dir seedance-projects/d
 
 - API 生成面为 4–30 秒 / 720P；更长成片由插件自动拆段 + 拼接。即梦网页版专属能力（180 秒原生超长、局部编辑、绿幕、白模）不经 API；需要时插件生成可粘贴到即梦网页的提示词作为降级。
 - 视频/音频参考素材需公网可直连 URL；图片参考走 base64 无此限制。
-- 复刻他人视频时人物一律生成新身份锚定图，不从原片抽帧（肖像合规）；BGM 不提取原曲（版权）。
+- 复刻参考视频中的原演员时生成新身份锚定图，不从原片抽帧；用户另行提供并明确指定的授权人物照片则保持为唯一身份权威，使用 `--identity-ref` / `--identity-image` 直传，禁止只在第一次生图后改用 AI 锚定图。BGM 不提取原曲（版权）。
 - Key 保存在本机 `~/.seedance-studio/config.json`，不要提交到任何仓库。
 
 ## 鸣谢与来源

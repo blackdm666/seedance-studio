@@ -1,6 +1,6 @@
 {
   "name": "seedance-studio",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "基于 88API 的 Seedance 2.5 短片工作室：一句话生成单条短片与 TVC/广告片（文生/图生、多镜拆段拼接），外加视频提示词反推与可复刻工程包。专注单条成片，不做多集连续剧。",
   "homepage": "https://88api.ai/",
   "author": {
@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "88API-Seedance-Studio",
     "shortDescription": "Seedance 2.5 短片工作室：单镜直出到多镜短片/TVC，支持文生/图生视频、提示词反推与拼接（专注单条成片，不做连续剧）。",
-    "longDescription": "通过 88API 集成 Seedance 2.5 与 gpt-image（gpt-image-2-4k / gpt-image-2）生图，支持文生视频、图生视频、多模态参考与关键帧预审。启动时自动按规模分级：T0 单镜直接出片（含 15–30 秒 TVC）、T1 多镜短片拆段生成再 ffmpeg 拼接成一条连续成片（短片 / 长 TVC / 宣传片）；也支持视频提示词反推（含运动理解与音频拆解：台词/BGM/音效时间轴，走 Gemini 多模态）和可复刻工程包。专注单条短片与广告片，不做多集连续短剧/剧集/电影。",
+    "longDescription": "通过 88API 集成 Seedance 2.5 与 gpt-image（gpt-image-2-4k / gpt-image-2）生图，支持文生视频、图生视频、多模态参考与关键帧预审。启动时自动按规模分级：T0 单镜直接出片（含 15–30 秒 TVC）、T1 多镜短片拆段生成再 ffmpeg 拼接成一条连续成片（短片 / 长 TVC / 宣传片）；也支持视频提示词反推（含运动理解与音频拆解：台词/BGM/音效时间轴，走 Gemini 多模态）和可复刻工程包。授权人物原图可作为唯一身份权威直传关键帧与视频，避免 AI 锚定图套娃造成脸部合成感。专注单条短片与广告片，不做多集连续短剧/剧集/电影。",
     "category": "Productivity",
     "capabilities": ["Write"],
     "websiteURL": "https://88api.ai/",

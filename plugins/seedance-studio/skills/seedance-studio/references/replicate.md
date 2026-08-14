@@ -40,6 +40,8 @@
   node studio.mjs image --prompt "<同一人物，换到厨房侧身中景>" --model gemini --ref "assets/keyframe_xxx.png" --out assets
   ```
 
+> **批量并发**：多张锚定图 / 多套方案不用逐张来——重复 `--prompt` 或加 `--n` 一次提交，插件用并发池并行跑（`--concurrency` 默认 3、上限 10），每张独立走兜底链、单张失败不炸整批，比串行快数倍。
+
 产出 `assets/manifest.json`（每张图唯一职责）+ 给用户的人话清单（"请提供：①礼盒正面图 ②内包装图 ③产品剖面图"）。
 
 ## 第四步：文案与声音

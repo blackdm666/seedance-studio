@@ -55,6 +55,11 @@ function imgSize(aspect, scale) {
   const table = scale === "4k" ? IMG_ASPECTS_4K : IMG_ASPECTS;
   return table[aspect] || null;
 }
+// 某模型能否出这个画幅：chat(gemini) 看 GEMINI_ASPECTS，images(gpt) 看像素尺寸表（2K/4K 两表键一致）。
+// 校验必须按模型分流——gemini 支持 21:9/4:5/5:4（gpt 表没有），gpt 支持 7:4/2:1（gemini 没有），别拿一张表卡另一个。
+function imgAspectOk(id, aspect) {
+  return imgKind(id) === "chat" ? GEMINI_ASPECTS.has(aspect) : Object.prototype.hasOwnProperty.call(IMG_ASPECTS, aspect);
+}
 // 与参考插件 88api-image-gen 一致：按目标 size 追加"画幅约束"提示词后缀，再拼进最终 prompt
 function gcd(a, b) { a = Math.abs(a); b = Math.abs(b); while (b) { [a, b] = [b, a % b]; } return a; }
 function aspectPromptSuffixForSize(size) {
@@ -85,7 +90,7 @@ const MIME = { ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".
 const CAPS = [
   "Seedance 2.5 能力边界（88api，插件已按此硬校验）：",
   "  • 时长 4–30 秒（整数，按秒计费）",
-  "  • 分辨率 480p / 720p（实测均生效；不支持 1080p/4k）",
+  "  • 分辨率 720p（1280×720，插件固定输出；不支持 1080p/4k）",
   "  • 画幅 ratio: auto / 21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16",
   "  • 图片参考 ≤30 张（本地图自动转 base64，无需公网 URL）",
   "  • 视频参考 ≤10 个（必须公网直连 http(s) URL；官方：每段 2–30s、总时长 ≤30s）",
@@ -98,7 +103,7 @@ const CAPS = [
   "88api 实测透传（2026-08 三档实测，可用）：",
   "  • 首帧 first_frame / 首尾帧 first+last_frame（实测生效）",
   "  • 视频参考 reference_video（迁运镜）/ 音频参考 reference_audio（卡节奏）",
-  "  • 分辨率 480p（resolution:480p 实测生效，输出 854×480）",
+  "  • 分辨率固定 720p（1280×720 实测生效）——480p 上游虽可用但插件统一 720p 交付、不暴露为选项",
   "  • 视频编辑 edit / 视频延长 extend（可用但约 50% 成功率，需自动容错重试）",
   "88api 实测忽略（缩水，别向用户承诺）：",
   "  • output_format:mov —— 被忽略，统一回吐标准 mp4（isom/yuv420p）",
@@ -107,7 +112,7 @@ const CAPS = [
   "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
   "生图（关键帧/锚定图，2026-08 实测）：",
   "  • 默认 gpt-image-2-4k（OpenAI 上游，/v1/images）：16:9 实测出真 4K UHD 3840×2160；方图约 2880²（返回 URL）",
-  "  • gemini-3.1-flash-image（`--model gemini`，flash 快版，Google 上游）：走 /v1/chat/completions 多模态，支持 1K/2K/4K（`--resolution`，默认 4K；比例/分辨率走 image_config），比 pro 快、适合批量并发，参考图一致性强",
+  "  • gemini-3.1-flash-image（`--model gemini`，flash 快版，Google 上游）：走 /v1/chat/completions 多模态，支持 1K/2K/4K（`--resolution`，默认 4K；比例/分辨率走 image_config），出图快、适合批量并发，参考图一致性强",
   "  • 自动兜底链：默认档失败 → gemini（chat，不同上游）（`--no-fallback` 关闭）；按错误分类分流：确定性错误(401/审核/模型名)立即停并诊断，熔断/容量即时跨上游，瞬时抖动同模型先重试 1 次",
   "  • 不满意画面/参考还原：手动 `--model gemini`（flash 快版）重试（一致性强）",
   "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——gpt 走 /v1/images/edits，gemini 走 chat 多模态；功能三保产品/人物一致性首选",
@@ -470,6 +475,7 @@ async function generateOneImage(cfg, slot) {
   let fatal = false;
   for (let idx = 0; idx < chain.length && !fatal; idx++) {
     const id = chain[idx];
+    if (!imgAspectOk(id, aspect)) { errs.push(id + " → 跳过：该模型不支持 " + aspect + " 画幅"); continue; } // 别静默改比例
     const m = IMG_MODELS[id] || resolveImgModel(id);
     const size = imgSize(aspect, m.scale);
     let attempt = 0;
@@ -493,7 +499,10 @@ async function cmdImage(cfg, args) {
   if (!prompts.length) die("需要 --prompt（可重复 --prompt 出多张不同图，并发跑）");
   const aspect = String(args.aspect || "16:9");
   const primary = resolveImgModel(args.model);
-  if (!imgSize(aspect, primary.scale)) die("aspect 仅支持: " + Object.keys(IMG_ASPECTS).join(", "));
+  if (!imgAspectOk(primary.id, aspect)) {
+    const ok = imgKind(primary.id) === "chat" ? [...GEMINI_ASPECTS] : Object.keys(IMG_ASPECTS);
+    die("aspect 对 " + primary.id + " 仅支持: " + ok.join(", "));
+  }
   const resolution = String(args.resolution || "4K").toUpperCase(); // 仅 gemini(chat) 用；1K/2K/4K
   if (!IMG_RESOLUTIONS.has(resolution)) die("--resolution 仅支持 1K / 2K / 4K（仅对 --model gemini 生效）");
   const n = args.n ? parseInt(args.n, 10) : 1;
@@ -586,7 +595,7 @@ async function cmdImage(cfg, args) {
     const last = failResults.flatMap((r) => r.errs).join(" ");
     if (failResults.some((r) => r.fatal)) log(fatalHint(last)); else log(upstreamHint(last));
   }
-  if (!okResults.some((r) => r.model.id === "gemini-3.1-flash-image")) log("[提示] 对画面/参考还原不满意？加 --model gemini（flash 快版，一致性强）重试。");
+  if (!refs.length && !okResults.some((r) => r.model.id === "gemini-3.1-flash-image")) log("[提示] 对画面/参考还原不满意？加 --model gemini（flash 快版，一致性强）重试。");
 }
 // ---------- concat (ffmpeg) ----------
 function cmdConcat(cfg, args) {

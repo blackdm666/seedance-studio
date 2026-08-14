@@ -25,10 +25,13 @@ const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
 const IMG_ASPECTS_4K = { "1:1":"2880x2880","3:2":"3520x2352","2:3":"2352x3520","4:3":"3264x2448","3:4":"2448x3264","16:9":"3840x2160","9:16":"2160x3840","2:1":"3840x1920","1:2":"1920x3840","7:4":"3808x2176","4:7":"2176x3808" };
 const IMAGE_MAX_EDGE = 3840;
+// gemini 走 chat 端点，分辨率/比例用「结构化参数」而非像素 size（协议抄自 88api-nano-banana 插件）
+const IMG_RESOLUTIONS = new Set(["1K", "2K", "4K"]);          // extra_body.google.image_config.image_size
+const GEMINI_ASPECTS = new Set(["1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9","21:9"]); // aspect_ratio 取值
 // 生图模型预设（gpt 走 /v1/images/*；gemini 走 /v1/chat/completions 多模态，2026-08 实测）
 const IMG_MODELS = {
   "gpt-image-2-4k":             { id: "gpt-image-2-4k",             kind: "images", scale: "4k",     note: "默认·高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）" },
-  "gemini-3-pro-image":         { id: "gemini-3-pro-image",         kind: "chat",   scale: "native", note: "pro 模型·Gemini 3 Pro Image（chat 端点，原生比例出图，分辨率以模型为准；参考图一致性最强，锁角色/垫图首选）" },
+  "gemini-3-pro-image":         { id: "gemini-3-pro-image",         kind: "chat",   scale: "native", note: "pro 模型·Gemini 3 Pro Image（chat 端点，支持 1K/2K/4K，默认 4K；比例/分辨率走 image_config；参考图一致性最强，锁角色/垫图首选）" },
 };
 // 友好别名 → 预设键
 const IMG_ALIASES = {
@@ -92,7 +95,7 @@ const CAPS = [
   "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
   "生图（关键帧/锚定图，2026-08 实测）：",
   "  • 默认 gpt-image-2-4k（OpenAI 上游，/v1/images）：16:9 实测出真 4K UHD 3840×2160；方图约 2880²（返回 URL）",
-  "  • gemini-3-pro-image（`--model gemini`，pro 模型，Google 上游）：走 /v1/chat/completions 多模态，原生比例出图，参考图一致性最强",
+  "  • gemini-3-pro-image（`--model gemini`，pro 模型，Google 上游）：走 /v1/chat/completions 多模态，支持 1K/2K/4K（`--resolution`，默认 4K；比例/分辨率走 image_config），参考图一致性最强",
   "  • 自动兜底链：默认档失败 → gemini（chat，不同上游）（`--no-fallback` 关闭）；按错误分类分流：确定性错误(401/审核/模型名)立即停并诊断，熔断/容量即时跨上游，瞬时抖动同模型先重试 1 次",
   "  • 不满意画面/参考还原：手动 `--model gemini` 用 pro 模型重试（一致性更强）",
   "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——gpt 走 /v1/images/edits，gemini 走 chat 多模态；功能三保产品/人物一致性首选",
@@ -363,9 +366,13 @@ function parseChatImages(json) {
   return out;
 }
 // gemini 家族：图片经 /v1/chat/completions 多模态返回（chat 一次一图，n>1 循环）
-async function requestChatImages(cfg, modelId, prompt, n, refs, size) {
+// 请求协议抄自 88api-nano-banana 插件：不传像素 size、不传 n、不加中文画幅后缀；
+// 用 extra_body.google.image_config.{aspect_ratio,image_size} 控制比例与分辨率（image_size=1K|2K|4K，4K 由此得到）
+async function requestChatImages(cfg, modelId, prompt, n, refs, aspect, resolution) {
   const items = [];
-  const text = imageApiPrompt(prompt, size);
+  const text = String(prompt).trim();
+  const aspect_ratio = GEMINI_ASPECTS.has(aspect) ? aspect : "16:9";
+  const image_size = IMG_RESOLUTIONS.has(resolution) ? resolution : "4K";
   for (let k = 0; k < n; k++) {
     let content;
     if (refs.length) {
@@ -378,15 +385,21 @@ async function requestChatImages(cfg, modelId, prompt, n, refs, size) {
         content.push({ type: "image_url", image_url: { url: "data:" + mime + ";base64," + buf.toString("base64") } });
       }
     } else content = text;
-    const res = await api(cfg, "POST", "/v1/chat/completions", { model: modelId, messages: [{ role: "user", content }], modalities: ["text", "image"] });
+    const body = {
+      model: modelId,
+      messages: [{ role: "user", content }],
+      modalities: ["text", "image"],
+      extra_body: { google: { image_config: { aspect_ratio, image_size } } },
+    };
+    const res = await api(cfg, "POST", "/v1/chat/completions", body);
     const imgs = parseChatImages(res);
     if (!imgs.length) throw new Error("chat 端点未返回图片（" + modelId + "）");
     items.push(...imgs);
   }
   return items;
 }
-async function requestImages(cfg, modelId, prompt, n, size, refs) {
-  if (imgKind(modelId) === "chat") return requestChatImages(cfg, modelId, prompt, n, refs, size);
+async function requestImages(cfg, modelId, prompt, n, size, refs, aspect, resolution) {
+  if (imgKind(modelId) === "chat") return requestChatImages(cfg, modelId, prompt, n, refs, aspect, resolution);
   const finalPrompt = imageApiPrompt(prompt, size);
   if (refs.length) {
     const fd = new FormData();
@@ -420,6 +433,8 @@ async function cmdImage(cfg, args) {
   const aspect = String(args.aspect || "16:9");
   const primary = resolveImgModel(args.model);
   if (!imgSize(aspect, primary.scale)) die("aspect 仅支持: " + Object.keys(IMG_ASPECTS).join(", "));
+  const resolution = String(args.resolution || "4K").toUpperCase(); // 仅 gemini(chat) 用；1K/2K/4K
+  if (!IMG_RESOLUTIONS.has(resolution)) die("--resolution 仅支持 1K / 2K / 4K（仅对 --model gemini 生效）");
   const n = args.n ? parseInt(args.n, 10) : 1;
   if (!(n >= 1 && n <= 4)) die("--n 限 1–4");
   // 参考图（垫图/锁角色/锁产品）：任意个 --ref，走 /v1/images/edits
@@ -435,8 +450,13 @@ async function cmdImage(cfg, args) {
     log("[DRY-RUN] 生图兜底链: " + chain.join(" → "));
     for (const id of chain) {
       const m = IMG_MODELS[id] || resolveImgModel(id);
-      const size = imgSize(aspect, m.scale);
-      log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt: imageApiPrompt(prompt, size), n, size, refs }, null, 2));
+      if (imgKind(id) === "chat") {
+        // gemini：chat 端点结构化参数（不含像素 size / n）
+        log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt, aspect_ratio: GEMINI_ASPECTS.has(aspect) ? aspect : "16:9", image_size: resolution, refs }, null, 2));
+      } else {
+        const size = imgSize(aspect, m.scale);
+        log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt: imageApiPrompt(prompt, size), n, size, refs }, null, 2));
+      }
     }
     return;
   }
@@ -444,7 +464,8 @@ async function cmdImage(cfg, args) {
   let used = primary;
   let items;
   let fatal = false;
-  const label = refs.length ? "参考图生图 " + n + " 张 ←垫图 " + refs.length + " 张" : "生图 " + n + " 张 " + imgSize(aspect, primary.scale);
+  const primarySpec = imgKind(primary.id) === "chat" ? (aspect + " " + resolution) : imgSize(aspect, primary.scale);
+  const label = refs.length ? "参考图生图 " + n + " 张 ←垫图 " + refs.length + " 张" : "生图 " + n + " 张 " + primarySpec;
   const errs = [];
   for (let idx = 0; idx < chain.length && !items && !fatal; idx++) {
     const id = chain[idx];
@@ -454,7 +475,7 @@ async function cmdImage(cfg, args) {
     else log("[fallback] " + chain[idx - 1] + " 失败（" + (errs[errs.length - 1] || "").replace(/^[^→]*→\s*/, "") + "）→ 切换 " + id + "（不同上游 · " + endpointOf(id) + "）重试…");
     let attempt = 0;
     for (;;) {
-      try { items = await requestImages(cfg, id, prompt, n, size, refs); used = m; break; }
+      try { items = await requestImages(cfg, id, prompt, n, size, refs, aspect, resolution); used = m; break; }
       catch (e) {
         const cls = classifyImgError(e.message);
         // ③ 瞬时抖动：同模型快速重试 1 次（不计入 errs，不换上游）
@@ -726,8 +747,8 @@ const cfg = loadConfig();
     "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
-    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
-    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；失败自动兜底 gemini（不同上游·chat 端点，一致性最强）；不满意可 --model gemini 重试",
+    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini] [--resolution 1K|2K|4K] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
+    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；失败自动兜底 gemini（chat 端点·支持 4K，--resolution 调档，一致性最强）；不满意可 --model gemini 重试",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape|action] [--fps N] [--no-depth] [--out 目录]",
     "          题材自适应：character=真深度读人物动作/前后景；landscape=运动热图+原帧光色、跳深度(--with-depth 强开)；action=多人骨架(YOLO-pose)+运动+深度读武打连招(--no-pose 关骨架)；auto=都出自己挑。所有模式都出 motion_heat 读运镜"].join("\n"));

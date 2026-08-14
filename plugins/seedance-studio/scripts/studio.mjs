@@ -25,20 +25,18 @@ const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
 const IMG_ASPECTS_4K = { "1:1":"2880x2880","3:2":"3520x2352","2:3":"2352x3520","4:3":"3264x2448","3:4":"2448x3264","16:9":"3840x2160","9:16":"2160x3840","2:1":"3840x1920","1:2":"1920x3840","7:4":"3808x2176","4:7":"2176x3808" };
 const IMAGE_MAX_EDGE = 3840;
-// 生图模型预设（gpt/grok 走 /v1/images/*；gemini 走 /v1/chat/completions 多模态，2026-08 实测）
+// 生图模型预设（gpt 走 /v1/images/*；gemini 走 /v1/chat/completions 多模态，2026-08 实测）
 const IMG_MODELS = {
   "gpt-image-2-4k":             { id: "gpt-image-2-4k",             kind: "images", scale: "4k",     note: "默认·高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）" },
-  "grok-imagine-image-quality": { id: "grok-imagine-image-quality", kind: "images", scale: "native", note: "xAI Grok 高质量出图（约 2048²；不同上游，OpenAI 通道熔断时兜底首选）" },
-  "gemini-3-pro-image":         { id: "gemini-3-pro-image",         kind: "chat",   scale: "native", note: "pro 模型·Gemini 3 Pro Image（chat 端点，约 2048² 原生；参考图一致性最强，锁角色/垫图首选）" },
+  "gemini-3-pro-image":         { id: "gemini-3-pro-image",         kind: "chat",   scale: "native", note: "pro 模型·Gemini 3 Pro Image（chat 端点，原生比例出图，分辨率以模型为准；参考图一致性最强，锁角色/垫图首选）" },
 };
 // 友好别名 → 预设键
 const IMG_ALIASES = {
   "4k":"gpt-image-2-4k","gpt":"gpt-image-2-4k","gpt-4k":"gpt-image-2-4k","gpt-image-2-4k":"gpt-image-2-4k","default":"gpt-image-2-4k",
-  "grok":"grok-imagine-image-quality","grok-image":"grok-imagine-image-quality","grok-imagine":"grok-imagine-image-quality","grok-imagine-image-quality":"grok-imagine-image-quality",
   "gemini":"gemini-3-pro-image","gemini-pro":"gemini-3-pro-image","pro":"gemini-3-pro-image","gemini-3-pro-image":"gemini-3-pro-image",
 };
-// 主模型失败时的自动兜底链（跨上游：先 Google Gemini chat 端点，再 xAI Grok images 端点，避开同一 OpenAI 通道一起挂）
-const IMG_FALLBACKS = ["gemini-3-pro-image", "grok-imagine-image-quality"];
+// 主模型失败时的自动兜底链（跨上游：切 Google Gemini chat 端点，避开同一 OpenAI 通道一起挂）
+const IMG_FALLBACKS = ["gemini-3-pro-image"];
 function imgKind(id){ return /gemini/i.test(String(id)) ? "chat" : "images"; }
 function resolveImgModel(name) {
   if (!name) return IMG_MODELS["gpt-image-2-4k"];
@@ -94,11 +92,10 @@ const CAPS = [
   "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
   "生图（关键帧/锚定图，2026-08 实测）：",
   "  • 默认 gpt-image-2-4k（OpenAI 上游，/v1/images）：16:9 实测出真 4K UHD 3840×2160；方图约 2880²（返回 URL）",
-  "  • gemini-3-pro-image（`--model gemini`，pro 模型，Google 上游）：走 /v1/chat/completions 多模态，约 2048² 原生，参考图一致性最强",
-  "  • grok-imagine-image-quality（`--model grok`，xAI 上游，/v1/images）：不同上游，OpenAI 通道熔断时的兜底首选",
-  "  • 自动兜底链：默认档失败 → gemini（chat，不同上游）→ grok（xAI，不同上游）（`--no-fallback` 关闭）；按错误分类分流：确定性错误(401/审核/模型名)立即停并诊断，熔断/容量即时跨上游，瞬时抖动同模型先重试 1 次",
+  "  • gemini-3-pro-image（`--model gemini`，pro 模型，Google 上游）：走 /v1/chat/completions 多模态，原生比例出图，参考图一致性最强",
+  "  • 自动兜底链：默认档失败 → gemini（chat，不同上游）（`--no-fallback` 关闭）；按错误分类分流：确定性错误(401/审核/模型名)立即停并诊断，熔断/容量即时跨上游，瞬时抖动同模型先重试 1 次",
   "  • 不满意画面/参考还原：手动 `--model gemini` 用 pro 模型重试（一致性更强）",
-  "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——gpt/grok 走 /v1/images/edits，gemini 走 chat 多模态；功能三保产品/人物一致性首选",
+  "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——gpt 走 /v1/images/edits，gemini 走 chat 多模态；功能三保产品/人物一致性首选",
 ];
 
 function loadConfig() {
@@ -129,7 +126,7 @@ function classifyImgError(msg) {
 function upstreamHint(msg) {
   const s = String(msg || "");
   if (/circuit breaker|temporarily suspended|no active tokens|no available (channel|account)|可用渠道不存在|503|no available channel/i.test(s))
-    return "\n[诊断] 88api 上游通道熔断/容量不足（非你的 Key/提示词/模型名问题）：已尝试自动切换其他上游；仍不行请稍后重试，或换 `--model gemini` / `--model grok`。失败调用不产图、不计费。";
+    return "\n88API 上游通道熔断/容量不足（非你的 Key/提示词/模型名问题），失败调用不产图、不计费。请前往 https://88api.ai 后台内联系客服！";
   return "";
 }
 // 确定性错误的对症提示（换模型也没用，先修这里）
@@ -729,8 +726,8 @@ const cfg = loadConfig();
     "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
-    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini|grok] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
-    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；失败自动跨上游兜底 gemini→grok；gemini 走 chat 端点、一致性最强，不满意可 --model gemini 重试",
+    '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
+    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；失败自动兜底 gemini（不同上游·chat 端点，一致性最强）；不满意可 --model gemini 重试",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape|action] [--fps N] [--no-depth] [--out 目录]",
     "          题材自适应：character=真深度读人物动作/前后景；landscape=运动热图+原帧光色、跳深度(--with-depth 强开)；action=多人骨架(YOLO-pose)+运动+深度读武打连招(--no-pose 关骨架)；auto=都出自己挑。所有模式都出 motion_heat 读运镜"].join("\n"));

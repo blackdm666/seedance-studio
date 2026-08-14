@@ -31,7 +31,7 @@ const GEMINI_ASPECTS = new Set(["1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16"
 // 生图模型预设（gpt 走 /v1/images/*；gemini 走 /v1/chat/completions 多模态，2026-08 实测）
 const IMG_MODELS = {
   "gpt-image-2-4k":             { id: "gpt-image-2-4k",             kind: "images", scale: "4k",     note: "默认·高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）" },
-  "gemini-3.1-flash-image":     { id: "gemini-3.1-flash-image",     kind: "chat",   scale: "native", note: "flash 快版·Gemini 3.1 Flash Image（chat 端点，1K/2K/4K，默认 4K；比例/分辨率走 image_config；比 pro 快很多，适合高并发/批量；参考图一致性强，锁角色/垫图可用。4K 实际像素待实测）" },
+  "gemini-3.1-flash-image":     { id: "gemini-3.1-flash-image",     kind: "chat",   scale: "native", note: "flash 快版·Gemini 3.1 Flash Image（chat 端点，1K/2K/4K，默认 4K；实测 4K 16:9=5504×3072 JPEG≈9MB，并发5出5张仅53s；比例/分辨率走 image_config；能吃高并发/批量，参考图一致性强，锁角色/垫图可用）" },
 };
 // 友好别名 → 预设键
 const IMG_ALIASES = {
@@ -72,6 +72,15 @@ function imageApiPrompt(prompt, size) {
 }
 // 与参考插件 extractImagesFromImageApi 一致：b64_json / base64 / image.b64_json 都认
 function imgItemB64(it) { return (it && (it.b64_json || it.base64 || (it.image && it.image.b64_json))) || null; }
+// 按真实字节 magic number 定扩展名（flash 返回 JPEG、gpt 可能 PNG/JPEG——别无脑当 .png）
+function imgExt(buf) {
+  if (!buf || buf.length < 12) return ".png";
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return ".png";
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return ".jpg";
+  if (buf.slice(0, 4).toString("latin1") === "RIFF" && buf.slice(8, 12).toString("latin1") === "WEBP") return ".webp";
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return ".gif";
+  return ".png"; // 未知兜底
+}
 const MIME = { ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".webp":"image/webp", ".gif":"image/gif" };
 const CAPS = [
   "Seedance 2.5 能力边界（88api，插件已按此硬校验）：",
@@ -204,6 +213,12 @@ async function download(url, dest) {
   if (!res.ok) throw new Error("下载失败 HTTP " + res.status);
   await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
   return dest;
+}
+// 下载为 Buffer（便于按真实字节定扩展名）
+async function downloadBuf(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("下载失败 HTTP " + res.status);
+  return Buffer.from(await res.arrayBuffer());
 }
 
 // ---------- video ----------
@@ -534,11 +549,13 @@ async function cmdImage(cfg, args) {
     const paths = [];
     let sub = 0;
     for (const it of r.items) {
-      const dest = join(dir, "keyframe_" + batchTs + "_" + pad(index) + (r.items.length > 1 ? "_" + sub : "") + ".png");
       const b64 = imgItemB64(it);
-      if (b64) writeFileSync(dest, Buffer.from(b64, "base64"));
-      else if (it.url) await download(it.url, dest);
+      let buf = null;
+      if (b64) buf = Buffer.from(b64, "base64");
+      else if (it.url) buf = await downloadBuf(it.url);
       else continue;
+      const dest = join(dir, "keyframe_" + batchTs + "_" + pad(index) + (r.items.length > 1 ? "_" + sub : "") + imgExt(buf));
+      writeFileSync(dest, buf);
       paths.push(dest); sub++;
     }
     if (!paths.length) { log("  [" + (index + 1) + "/" + total + "] FAIL 响应无图片数据（" + r.model.id + "）"); return { index, ok: false, errs: ["响应无图片数据 (" + r.model.id + ")"], fatal: false }; }

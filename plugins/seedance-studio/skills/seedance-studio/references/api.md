@@ -18,7 +18,7 @@
 | 别名 | 模型 id | 端点/返回 | 输出实测 | 用途 |
 |---|---|---|---|---|
 | （**默认**） | `gpt-image-2-4k` | `/v1/images/generations` / **url**（Adobe Firefly S3，OpenAI 上游） | **16:9=3840×2160 真 4K UHD**；方图约 2880² | 高清主图 / 海报 / 产品图 / 锚定图（默认档） |
-| `gemini`（flash） | `gemini-3.1-flash-image` | **`/v1/chat/completions`** 多模态 / 图片以 `data:image/png;base64` 内嵌在 `message.content` | 由 `image_config.image_size` 指定 1K/2K/4K（插件默认 4K）；**flash 快版，出图明显快于 pro，适合批量并发**；4K 实际像素**待实测** | 参考图一致性强；垫图 / 锁角色 / 锁产品；**默认档失败时首选兜底 & 不满意时手动切它** |
+| `gemini`（flash） | `gemini-3.1-flash-image` | **`/v1/chat/completions`** 多模态 / 图片以 `data:image/*;base64` 内嵌在 `message.content` | 由 `image_config.image_size` 指定 1K/2K/4K（插件默认 4K）；**实测 4K 16:9=5504×3072（16.9MP）但返回 JPEG≈9MB**（非 PNG，有损但更小更快）；**能吃高并发**：并发 5 出 5 张仅 53s（单发 71s） | 参考图一致性强；垫图 / 锁角色 / 锁产品；**默认档失败时首选兜底 & 不满意时手动切它 & 批量出图首选** |
 
 - 命令：`node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model 4k|gemini] [--resolution 1K|2K|4K] [--ref 参考图 ...] [--no-fallback]`
 - **批量并发出图**：可重复 `--prompt` 出多张不同图，或 `--n` 每个提示词出几张；**总量 = 提示词数 × n**，交给并发池并行跑（`--concurrency` 默认 3、上限 10）。**并发结构抄自 `88api-image-gen`**（`MAX_CONCURRENCY=10`、默认 `concurrency=3`）：`N` 个 dispatcher 从共享游标拉任务，`Promise.all(Array.from({length:N}, dispatcher))`，跑完一个立刻拉下一个；单 key 场景已裁掉参考插件的多 worker/粘性分组。**每张都是独立单图请求**（gpt 也不再用服务端 `n` 批量），各自独立走兜底链与重试，单张失败/存盘异常不炸整批；输出文件名 `keyframe_<批次时间戳>_<槽位序号>.png`。默认并发保守（3），是为了别把单 key 的上游打到熔断（429/circuit breaker）；批量越大越要留意上游容量。

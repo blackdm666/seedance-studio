@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// seedance-studio CLI — 88api.ai Seedance 2.5 video + gpt-image-2-4k / gemini-3-pro-image keyframes
+// seedance-studio CLI — 88api.ai Seedance 2.5 video + gpt-image-2-4k / gemini-3.1-flash-image keyframes
 // Zero-dependency Node 18+. Config: ~/.seedance-studio/config.json
 import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -31,15 +31,15 @@ const GEMINI_ASPECTS = new Set(["1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16"
 // 生图模型预设（gpt 走 /v1/images/*；gemini 走 /v1/chat/completions 多模态，2026-08 实测）
 const IMG_MODELS = {
   "gpt-image-2-4k":             { id: "gpt-image-2-4k",             kind: "images", scale: "4k",     note: "默认·高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）" },
-  "gemini-3-pro-image":         { id: "gemini-3-pro-image",         kind: "chat",   scale: "native", note: "pro 模型·Gemini 3 Pro Image（chat 端点，1K/2K/4K，默认 4K；实测 4K 16:9=5504×3072；比例/分辨率走 image_config；参考图一致性最强，锁角色/垫图首选）" },
+  "gemini-3.1-flash-image":     { id: "gemini-3.1-flash-image",     kind: "chat",   scale: "native", note: "flash 快版·Gemini 3.1 Flash Image（chat 端点，1K/2K/4K，默认 4K；比例/分辨率走 image_config；比 pro 快很多，适合高并发/批量；参考图一致性强，锁角色/垫图可用。4K 实际像素待实测）" },
 };
 // 友好别名 → 预设键
 const IMG_ALIASES = {
   "4k":"gpt-image-2-4k","gpt":"gpt-image-2-4k","gpt-4k":"gpt-image-2-4k","gpt-image-2-4k":"gpt-image-2-4k","default":"gpt-image-2-4k",
-  "gemini":"gemini-3-pro-image","gemini-pro":"gemini-3-pro-image","pro":"gemini-3-pro-image","gemini-3-pro-image":"gemini-3-pro-image",
+  "gemini":"gemini-3.1-flash-image","gemini-flash":"gemini-3.1-flash-image","flash":"gemini-3.1-flash-image","gemini-3.1-flash-image":"gemini-3.1-flash-image",
 };
 // 主模型失败时的自动兜底链（跨上游：切 Google Gemini chat 端点，避开同一 OpenAI 通道一起挂）
-const IMG_FALLBACKS = ["gemini-3-pro-image"];
+const IMG_FALLBACKS = ["gemini-3.1-flash-image"];
 // 并发（抄 88api-image-gen：MAX_CONCURRENCY=10、DEFAULTS.concurrency=3）；单 key 默认保守，别把上游打熔断
 const IMG_MAX_CONCURRENCY = 10;
 const IMG_DEFAULT_CONCURRENCY = 3;
@@ -98,9 +98,9 @@ const CAPS = [
   "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
   "生图（关键帧/锚定图，2026-08 实测）：",
   "  • 默认 gpt-image-2-4k（OpenAI 上游，/v1/images）：16:9 实测出真 4K UHD 3840×2160；方图约 2880²（返回 URL）",
-  "  • gemini-3-pro-image（`--model gemini`，pro 模型，Google 上游）：走 /v1/chat/completions 多模态，支持 1K/2K/4K（`--resolution`，默认 4K；比例/分辨率走 image_config），参考图一致性最强",
+  "  • gemini-3.1-flash-image（`--model gemini`，flash 快版，Google 上游）：走 /v1/chat/completions 多模态，支持 1K/2K/4K（`--resolution`，默认 4K；比例/分辨率走 image_config），比 pro 快、适合批量并发，参考图一致性强",
   "  • 自动兜底链：默认档失败 → gemini（chat，不同上游）（`--no-fallback` 关闭）；按错误分类分流：确定性错误(401/审核/模型名)立即停并诊断，熔断/容量即时跨上游，瞬时抖动同模型先重试 1 次",
-  "  • 不满意画面/参考还原：手动 `--model gemini` 用 pro 模型重试（一致性更强）",
+  "  • 不满意画面/参考还原：手动 `--model gemini`（flash 快版）重试（一致性强）",
   "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——gpt 走 /v1/images/edits，gemini 走 chat 多模态；功能三保产品/人物一致性首选",
 ];
 
@@ -569,7 +569,7 @@ async function cmdImage(cfg, args) {
     const last = failResults.flatMap((r) => r.errs).join(" ");
     if (failResults.some((r) => r.fatal)) log(fatalHint(last)); else log(upstreamHint(last));
   }
-  if (!okResults.some((r) => r.model.id === "gemini-3-pro-image")) log("[提示] 对画面/参考还原不满意？加 --model gemini（pro 模型，一致性更强）重试。");
+  if (!okResults.some((r) => r.model.id === "gemini-3.1-flash-image")) log("[提示] 对画面/参考还原不满意？加 --model gemini（flash 快版，一致性强）重试。");
 }
 // ---------- concat (ffmpeg) ----------
 function cmdConcat(cfg, args) {

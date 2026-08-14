@@ -96,7 +96,7 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --mode auto --o
 参数：`--mode auto|character|landscape|action`、`--fps`（character 4 / landscape 2 / action 8）、`--colormap all|gray|magma|turbo`、`--model`（深度模型，默认 Depth-Anything-V2-Small-hf，CPU 约 0.6s/帧）、`--py`（指定 python）、`--with-depth`（landscape 下强开深度）、`--no-depth`（任意模式跳深度提速）、`--no-pose` / `--pose-model`（action 骨架）。
 
 > **降级**：无 Python/torch 时，character/auto/action 自动跳过真深度、仅出 ffmpeg 运动 pass（motion_edge + motion_heat）；无 ultralytics/opencv 时 action 跳过骨架、仍用 edge（轮廓读姿态）+ heat（轨迹）。装真深度：`pip install transformers timm pillow torch`；装骨架：`pip install ultralytics opencv-python`（均 CPU 版即可）。
-> **合规**：运动理解产物仅用于**理解运动与光色**，绝不把原片人物抽帧/抽脸复用——复刻阶段人物一律用 gpt-image-2-4k / gemini-3-pro-image 生成新身份（见 replicate.md）。
+> **合规**：运动理解产物仅用于**理解运动与光色**，绝不把原片人物抽帧/抽脸复用——复刻阶段人物一律用 gpt-image-2-4k / gemini-3.1-flash-image 生成新身份（见 replicate.md）。
 
 ## ④ 运镜判定（Claude 亲眼读 ②③ 帧）
 

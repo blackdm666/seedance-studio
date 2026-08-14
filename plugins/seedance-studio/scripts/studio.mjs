@@ -742,6 +742,87 @@ async function cmdDepth(cfg, args) {
   }
   log("[depth] 下一步：亲眼逐帧读 → 判运镜 → 写分镜头脚本 → 收敛最终提示词（见 references/reverse.md）");
 }
+// ---------- audio 拆解（反推⑦：人声转写 + BGM风格描述 + 音效时间轴）----------
+// 88api 无可用 STT 渠道（whisper/gpt-4o-transcribe 全 model_not_found），但 Gemini 多模态
+// （gemini-3.6-flash / 2.5-flash，实测 200、audio_tokens 计费确认真吃音频）能一次拆出
+// 台词/BGM/音效——比纯 whisper 更全。时间戳是模型估算、非帧级精准（要词级精准等 whisper 渠道）。
+const AUDIO_MODEL_DEFAULT = "gemini-3.6-flash";
+const AUDIO_PROMPT = [
+  "你在做视频反推里的【音频拆解】。只写你真正听到的，听不清的标「不确定」，绝不编造。严格分三部分输出：",
+  "【一、人声台词转写】逐句转写全部人声/对白/旁白/画外音，每句给大致时间戳（如 0:03–0:05）。完全没有人声就明确写「无人声台词」。语言非中文时标注语种并给原文。",
+  "【二、背景音乐(BGM)描述】只描述、不要逐字转录歌词（版权）：风格类型、主要配器、情绪、节奏/大致 BPM、随画面的情绪起伏。",
+  "【三、音效(SFX)时间轴】按时间列出可辨识音效（风声/爆破/脚步/金属撞击/低频 riser 等），各给时间段。只写确认听到的，别把画面动作臆想成音效。",
+].join("\n");
+async function cmdAudio(cfg, args) {
+  const video = args.video || args.input;
+  const audioIn = args.audio;
+  if (!video && !audioIn) die("需要 --video <视频路径> 或 --audio <音频文件>");
+  const model = args.model ? String(args.model) : AUDIO_MODEL_DEFAULT;
+  const dir = outDir(args);
+  // 1) 拿到音频：从视频抽（mp3/16k/mono，够小又保清晰）或直接用 --audio
+  let audioPath;
+  if (audioIn) {
+    audioPath = resolve(String(audioIn));
+    if (!existsSync(audioPath)) die("音频不存在: " + audioPath);
+    if (!/\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(audioPath)) die("音频格式需为 mp3/wav/m4a/aac/ogg/flac: " + audioPath);
+  } else {
+    const src = resolve(String(video));
+    if (!existsSync(src)) die("视频不存在: " + src);
+    audioPath = join(dir, "audio.mp3");
+    const win = [];
+    if (args.start !== undefined) win.push("-ss", String(args.start)); // 窗口化：只拆某段
+    if (args.end !== undefined) win.push("-to", String(args.end));
+    log("[audio] 抽取音轨 → " + audioPath + "（mp3 / 16k / mono）");
+    ffRun(["-y", "-hide_banner", "-loglevel", "error", ...win, "-i", src, "-vn", "-ac", "1", "-ar", "16000", "-acodec", "libmp3lame", audioPath], "抽音");
+    if (!existsSync(audioPath) || statSync(audioPath).size < 32) die("抽音失败：视频可能无音轨。先 ffprobe 确认音轨再重试。");
+  }
+  // 可选 Demucs 分离（--separate）：产出 vocals/伴奏 stem 供人耳核对转写与听 BGM；仍把整轨喂 Gemini（整轨里它已能分辨人声与配乐）。无 python/demucs 自动降级、不阻断。
+  if (args.separate) {
+    const py = detectPython(args);
+    if (py && spawnSync(py, ["-c", "import demucs"], { encoding: "utf8" }).status === 0) {
+      const sepRoot = join(dir, "stems");
+      log("[audio] Demucs 分离人声/伴奏（CPU，首次含下载模型）…");
+      const r = spawnSync(py, ["-m", "demucs", "--two-stems", "vocals", "-o", sepRoot, "-n", "htdemucs", audioPath], { stdio: "inherit" });
+      const stem = join(sepRoot, "htdemucs", basename(audioPath, extname(audioPath)));
+      if (r.status === 0 && existsSync(join(stem, "vocals.wav"))) {
+        log("[audio] ✅ 分离完成（仅作核对/听感，伴奏不复用原曲·版权）: " + stem);
+      } else log("[audio] Demucs 无输出，跳过（仍用整轨拆解）。");
+    } else log('[audio] 缺 python/demucs，跳过分离（用整轨拆解）。装: pip install demucs');
+  }
+  // 2) base64 → Gemini 多模态 chat（input_audio）
+  const buf = readFileSync(audioPath);
+  const sizeKB = (buf.length / 1024).toFixed(0);
+  const fmt = extname(audioPath).slice(1).toLowerCase().replace("m4a", "mp4");
+  log("[audio] " + sizeKB + "KB → " + model + "（input_audio · /v1/chat/completions）");
+  if (args["dry-run"]) { log("[DRY-RUN] 不调用付费接口。将 POST /v1/chat/completions，model=" + model + "，附音频 " + sizeKB + "KB(base64)。"); return; }
+  const prompt = args.prompt ? String(args.prompt) : AUDIO_PROMPT;
+  const body = { model, messages: [{ role: "user", content: [
+    { type: "text", text: prompt },
+    { type: "input_audio", input_audio: { data: buf.toString("base64"), format: fmt } },
+  ] }] };
+  let json;
+  try { json = await api(cfg, "POST", "/v1/chat/completions", body); }
+  catch (e) {
+    const cls = classifyImgError(e.message);
+    if (cls === "capacity") die(e.message + "\n[诊断] 该音频模型当前无可用渠道 → 换 --model gemini-2.5-flash 再试，或稍后重试。");
+    if (cls === "fatal") die(e.message + fatalHint(e.message));
+    die(e.message);
+  }
+  const content = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || "";
+  if (!content) die("模型未返回文本，原始响应: " + JSON.stringify(json).slice(0, 400));
+  const outMd = join(dir, "audio_analysis.md");
+  writeFileSync(outMd, "# 音频拆解 · " + basename(audioPath) + "\n\n> 模型 " + model + "（时间戳为模型估算、非帧级精准；BGM 只描述不提取原曲）\n\n" + content + "\n");
+  writeFileSync(join(dir, "audio_analysis.json"), JSON.stringify(json, null, 2));
+  log("");
+  log(content);
+  log("");
+  if (json.usage) {
+    const d = json.usage.prompt_tokens_details || {};
+    log("[usage] total=" + json.usage.total_tokens + (d.audio_tokens != null ? " (audio=" + d.audio_tokens + ")" : ""));
+  }
+  log("[DONE] 已保存: " + outMd);
+  log("[audio] 合规：BGM 只描述不提取原曲（版权）；转写仅用于反推分析，人物复刻一律新身份（见 reverse.md / replicate.md）。");
+}
 // ---------- meta ----------
 async function cmdSelfTest(cfg) {
   requireKey(cfg);
@@ -778,6 +859,7 @@ const cfg = loadConfig();
   if (cmd === "raw") return cmdRaw(cfg, args);
   if (cmd === "concat") return cmdConcat(cfg, args);
   if (cmd === "depth") return cmdDepth(cfg, args);
+  if (cmd === "audio") return cmdAudio(cfg, args);
   log(["seedance-studio CLI — 用法:",
     '  配置:  node studio.mjs --set-key "sk-..."   |  --get-config  |  --self-test  |  --caps',
     '  生视频: node studio.mjs video --prompt "..." [--duration 4-30] [--ratio 16:9]',
@@ -790,5 +872,7 @@ const cfg = loadConfig();
     "          默认 gpt-image-2(稳定 2K，网关自带兜底)；要更高清加 --model gpt-image-2-4k(16:9 真 4K UHD，断渠道直接报错)；均走 /v1/images，支持 --ref 垫图锁角色",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape|action] [--fps N] [--no-depth] [--out 目录]",
-    "          题材自适应：character=真深度读人物动作/前后景；landscape=运动热图+原帧光色、跳深度(--with-depth 强开)；action=多人骨架(YOLO-pose)+运动+深度读武打连招(--no-pose 关骨架)；auto=都出自己挑。所有模式都出 motion_heat 读运镜"].join("\n"));
+    "          题材自适应：character=真深度读人物动作/前后景；landscape=运动热图+原帧光色、跳深度(--with-depth 强开)；action=多人骨架(YOLO-pose)+运动+深度读武打连招(--no-pose 关骨架)；auto=都出自己挑。所有模式都出 motion_heat 读运镜",
+    "  音频拆解: node studio.mjs audio --video <片> [--audio 音频] [--start 秒 --end 秒] [--model gemini-3.6-flash] [--separate] [--out 目录] [--dry-run]",
+    "          抽音→Gemini 多模态一次拆出「人声台词(带时间戳) / BGM风格描述 / 音效时间轴」；默认 gemini-3.6-flash(思考模型、更透)，可换 gemini-2.5-flash。88api 无专用 STT 渠道故走多模态。--separate 用本地 Demucs 分人声/伴奏供核对。BGM 只描述不提取原曲(版权)"].join("\n"));
 })().catch(e => { console.error("[ERROR] " + (e && e.message ? e.message : String(e))); process.exitCode = 1; });

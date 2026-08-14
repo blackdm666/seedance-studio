@@ -31,6 +31,22 @@
 - 尺寸：`gpt-image-2-4k` 用 4K 像素尺寸表（16:9→**3840×2160**、4:3→3264×2448、3:4→2448×3264、1:1→2880²，均 ≤ 后端最长边上限 3840）；`gpt-image-2` 用 2K 像素尺寸表（16:9≈2048×1152、2:3=1360×2048、1:1=2048²）。**尺寸表 = `88api-image-gen` 的 `SIZE_MATRIX`（2K/4K 逐档一致，4K 不是把 2K 翻倍——翻倍会超 3840 最长边被上游拒）**；提示词尾部追加"画幅约束"后缀（`请严格按照 W:H … 画幅生成…`）压稳比例；参考图走 multipart `image[]`。
 - 计费按 token（`usage.output_tokens` 的 image_tokens）——**批量出锚定图前先 1 张试方向**。
 
+## 音频拆解（反推功能⑦：无专用 STT → 走 Gemini 多模态，2026-08 实测）
+
+反推要读台词/BGM/音效，但 **88api 当前没有可用的专用 STT 转写渠道**：`POST /v1/audio/transcriptions` 端点在、但 `whisper-1` / `whisper-large-v3` / `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` / `sensevoice-v1` / `qwen3-asr-flash` 实测全回 `503 model_not_found · No available channel … under group auto`；`gemini-3.1-tts` 拿去转写回 `Vertex AI only supports audio speech requests`（只能合成）。`/v1/models` 里唯一音频相关就是 `gemini-3.1-tts`（TTS）。
+
+**可用路径 = Gemini 多模态**（`POST /v1/chat/completions`，`content[]` 放 `input_audio`）：`gemini-3.6-flash`（插件默认，思考模型拆得更透）/ `gemini-2.5-flash` 实测 **200**，计费 `usage.prompt_tokens_details.audio_tokens` 那一档确认音频被当独立模态吃进去（约 25 tokens/秒）。一次拆出 台词转写 / BGM风格描述 / 音效时间轴。
+
+```jsonc
+{ "model": "gemini-3.6-flash", "messages": [{ "role": "user", "content": [
+  { "type": "text",        "text": "转写台词并描述BGM与音效…" },
+  { "type": "input_audio", "input_audio": { "data": "<base64>", "format": "mp3" } } ] }] }
+```
+
+- CLI：`audio --video <片> [--audio 文件] [--start/--end 秒] [--model gemini-2.5-flash] [--separate]`（`--separate` 走本地 Demucs 分人声/伴奏供人耳核对，缺依赖自动降级）。
+- **局限**：时间戳是**模型估算、非帧级精准**；要词级精准需等 88api 挂上 whisper 渠道（届时 `--model whisper-1` 可改走 `/v1/audio/transcriptions`）。
+- **合规**：BGM 只描述、不逐字转录歌词、不提取原曲（版权）；转写仅用于反推分析。
+
 ## 视频能力边界
 
 - 时长 4–30 秒（`duration` 整数或 `seconds` 字符串，二选一）

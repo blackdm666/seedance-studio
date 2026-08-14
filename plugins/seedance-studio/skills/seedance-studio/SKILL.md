@@ -88,17 +88,18 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" video --prompt "<提示词>" --duration 
 
 遇到连续剧需求，给**替代方案**：先做一条**自成一体的单集样片 / 预告 / TVC**（走 T0 或 T1），把风格、主角脸、节奏跑通给用户看；要成系列请换专门的制片工具链，本插件不承担。
 
-## 功能二：反推提示词（六段可视化流水线）
+## 功能二：反推提示词（七段可视化流水线）
 
-加载 [references/reverse.md](references/reverse.md) 执行六段，**每段落盘产物、逐段展示给用户**以体现能力：①探测（ffprobe 元数据）→ ②结构总览（ffmpeg 联系表 + 切镜点 + 密集帧）→ ③**运动理解 pass（按题材自适应）**：人物/产品片走 `--mode character`（真深度图视频：灰度/熔岩/光谱 + 四格样张，身体朝向与前后景一眼可读）；宏大风景/山河/大场面片走 `--mode landscape`（跳过深度——单目深度对天空/云海/水面失效且丢光色——改出 motion_heat 运镜热图 + atmosphere 大气原帧样张）；武打/舞蹈/快速动作片走 `--mode action`（8fps + 多人 YOLO-pose 骨架条 pose_strip/pose_skeleton 读连招站位 + 运动 + 深度）；拿不准用 `--mode auto` → ④运镜判定（Claude 亲眼读 ②③ 帧）→ ⑤分镜头脚本（Claude）→ ⑥最终提示词（Claude）。
+加载 [references/reverse.md](references/reverse.md) 执行七段，**每段落盘产物、逐段展示给用户**以体现能力：①探测（ffprobe 元数据）→ ②结构总览（ffmpeg 联系表 + 切镜点 + 密集帧）→ ③**运动理解 pass（按题材自适应）**：人物/产品片走 `--mode character`（真深度图视频：灰度/熔岩/光谱 + 四格样张，身体朝向与前后景一眼可读）；宏大风景/山河/大场面片走 `--mode landscape`（跳过深度——单目深度对天空/云海/水面失效且丢光色——改出 motion_heat 运镜热图 + atmosphere 大气原帧样张）；武打/舞蹈/快速动作片走 `--mode action`（8fps + 多人 YOLO-pose 骨架条 pose_strip/pose_skeleton 读连招站位 + 运动 + 深度）；拿不准用 `--mode auto` → ④运镜判定（Claude 亲眼读 ②③ 帧）→ ⑤分镜头脚本（Claude）→ ⑥最终提示词（Claude）→ ⑦**音频拆解**（ffmpeg 抽音 + Gemini 多模态一次拆出 台词时间线/BGM风格/音效时间轴——88api 无可用 STT 渠道故走多模态，实测计费含 audio_tokens 确认真在听）。
 
 **为什么要③、为什么要分题材**：纯抽帧只能看孤立静帧，分不清人物是走近还是镜头推近、手是拿起还是放下——先做运动 pass 把"动"变可读。但**武器要对题材**：人物有硬几何、深度图能读朝向与层次；风景主体是空间与光，深度反而把云海压成灰渐变、抹掉光色大气，此时该用运镜热图+原帧；武打招式在零点几秒内、还常是两人对打，靠**高帧率+多人骨架**才拆得清连招（**但要交底：反推提示词能做到位，Seedance 不做帧级精确连招复刻**）。命令：
 
 ```powershell
 node "<PLUGIN_ROOT>/scripts/studio.mjs" depth --video "<视频>" --mode character|landscape|action|auto --out "<project>/analysis"
+node "<PLUGIN_ROOT>/scripts/studio.mjs" audio --video "<视频>" --out "<project>/analysis/audio"   # ⑦ 音频拆解（台词/BGM/音效）
 ```
 
-FF 的位置：**ffprobe 只做①，ffmpeg 做②抽帧与③的上色/合成/运动（搬运层），人物模式的真深度交给 Depth-Anything V2、武打模式的骨架交给 YOLO-pose、风景模式直接用 ffmpeg 运动热图+原帧，④⑤⑥的判断永远是 Claude 亲眼看帧**——ffmpeg 不做真深度。产出的 shotlist 与提示词可直接转入功能三（补素材）或功能一（直接生成）。**反推若识别到反复出现的核心人物/产品：转功能一直接出片前，必须先按「主角先行」生成一张合规新身份锚定图再 `--ref` 锁定（绝不抽原片脸）**；向用户说明：好视频光有提示词不够——主角一致性要靠锚定图绑定，需要成体系补素材时推荐功能三。
+FF 的位置：**ffprobe 只做①，ffmpeg 做②抽帧与③的上色/合成/运动（搬运层）+ ⑦的抽音，人物模式的真深度交给 Depth-Anything V2、武打模式的骨架交给 YOLO-pose、风景模式直接用 ffmpeg 运动热图+原帧、⑦的音频转写+描述交给 Gemini 多模态（88api 无可用 STT 渠道），④⑤⑥的判断永远是 Claude 亲眼看帧**——ffmpeg 不做真深度。产出的 shotlist 与提示词可直接转入功能三（补素材）或功能一（直接生成）。**反推若识别到反复出现的核心人物/产品：转功能一直接出片前，必须先按「主角先行」生成一张合规新身份锚定图再 `--ref` 锁定（绝不抽原片脸）**；向用户说明：好视频光有提示词不够——主角一致性要靠锚定图绑定，需要成体系补素材时推荐功能三。
 
 ## 功能三：可复刻工程包
 

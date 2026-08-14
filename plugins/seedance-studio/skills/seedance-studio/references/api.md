@@ -26,8 +26,9 @@
 - **端点分流是硬约束**：`gpt-image-*` / `grok-imagine-*` 走 `/v1/images/*`；**`gemini-*-image` 必须走 `/v1/chat/completions`**（`modalities:["text","image"]`）——直接把 gemini 丢到 `/v1/images/generations` 会被上游拒：`500 not supported model for image generation, only imagen models are supported`（Google 侧报错透传）。插件已按模型名自动分流。
 - **上游熔断/容量类报错**（`circuit breaker` / `temporarily suspended` / `no active tokens` / `可用渠道不存在`）是 88api 上游容量问题，**非 Key/提示词/模型名问题**，失败调用不产图不计费；CLI 会解析并提示"约 N 秒后自动恢复"，稍后重试即可，别刷。
 - **不满意画面内容或参考还原度**：手动 `--model gemini` 用 pro 模型重试（一致性更强）——每次成功后 CLI 也会提示这一点。
-- **参考图生图（img2img / 垫图）**：任意个 `--ref <本地图>`。gpt/grok → `POST /v1/images/edits`（multipart，字段 `image` 可多次）；gemini → chat 多模态（`image_url` data URL 随 `text` 一起发）。实测：喂一张产品/角色图 + 提示词，能保留主体形态换场景/换光——**功能三保「产品外观/人物身份一致」的首选，一致性以 `gemini-3-pro-image` 最强**。
-- 尺寸：`gpt-image-2-4k` 用 4K 尺寸表（16:9→4096×2304 请求、实出 3840×2160）；`gemini` / `grok` 忽略/近似 size、按原生比例出图。
+- **参考图生图（img2img / 垫图）**：任意个 `--ref <本地图>`。gpt/grok → `POST /v1/images/edits`（multipart，字段 `image[]` 可多次）；gemini → chat 多模态（`image_url` data URL 随 `text` 一起发）。实测：喂一张产品/角色图 + 提示词，能保留主体形态换场景/换光——**功能三保「产品外观/人物身份一致」的首选，一致性以 `gemini-3-pro-image` 最强**。
+- 尺寸：`gpt-image-2-4k` 用 4K 尺寸表（16:9→**3840×2160**、4:3→3264×2448、3:4→2448×3264、1:1→2880²，均 ≤ 后端最长边上限 3840）；`gemini` / `grok` 忽略/近似 size、按原生比例出图。
+- **请求格式与参考插件 `88api-image-gen` 对齐**：① 尺寸表 = 该插件 `SIZE_MATRIX`（2K/4K 逐档一致，4K 不是把 2K 翻倍——翻倍会超 3840 最长边被上游拒）；② 自动在提示词尾部追加"画幅约束"后缀（`请严格按照 W:H … 画幅生成…`）压稳出图比例；③ 参考图走 multipart `image[]` 字段；④ 返回解析兼容 `b64_json` / `base64` / `image.b64_json` / `url` 四种形态。
 - 计费按 token（`usage.output_tokens` 的 image_tokens）——**批量出锚定图前先 1 张试方向**。
 
 ## 视频能力边界

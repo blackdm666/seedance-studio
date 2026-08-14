@@ -21,7 +21,10 @@ const DEFAULTS = {
   pollTimeoutMs: 25 * 60 * 1000,
 };
 const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
+// 尺寸表与参考插件 88api-image-gen 的 SIZE_MATRIX 完全一致（后端最长边上限 IMAGE_MAX_EDGE=3840，4K 档不是把 2K 翻倍）
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
+const IMG_ASPECTS_4K = { "1:1":"2880x2880","3:2":"3520x2352","2:3":"2352x3520","4:3":"3264x2448","3:4":"2448x3264","16:9":"3840x2160","9:16":"2160x3840","2:1":"3840x1920","1:2":"1920x3840","7:4":"3808x2176","4:7":"2176x3808" };
+const IMAGE_MAX_EDGE = 3840;
 // 生图模型预设（gpt/grok 走 /v1/images/*；gemini 走 /v1/chat/completions 多模态，2026-08 实测）
 const IMG_MODELS = {
   "gpt-image-2-4k":             { id: "gpt-image-2-4k",             kind: "images", scale: "4k",     note: "默认·高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）" },
@@ -45,11 +48,26 @@ function resolveImgModel(name) {
   return { id, kind: imgKind(id), scale: "native", note: "(自定义模型 id，按原生尺寸提交)" };
 }
 function imgSize(aspect, scale) {
-  const base = IMG_ASPECTS[aspect];
-  if (!base) return null;
-  if (scale === "4k") { const [w, h] = base.split("x").map(Number); return (w * 2) + "x" + (h * 2); }
-  return base;
+  const table = scale === "4k" ? IMG_ASPECTS_4K : IMG_ASPECTS;
+  return table[aspect] || null;
 }
+// 与参考插件 88api-image-gen 一致：按目标 size 追加"画幅约束"提示词后缀，再拼进最终 prompt
+function gcd(a, b) { a = Math.abs(a); b = Math.abs(b); while (b) { [a, b] = [b, a % b]; } return a; }
+function aspectPromptSuffixForSize(size) {
+  const mm = /^(\d+)x(\d+)$/.exec(String(size || ""));
+  if (!mm) return "";
+  const w = Number(mm[1]), h = Number(mm[2]);
+  const d = gcd(w, h); if (!d) return "";
+  const aspect = (w / d) + ":" + (h / d);
+  if (w === h) return "请严格按照 " + aspect + " 正方形画幅生成最终图片，整张图片必须为 " + aspect + " 比例。";
+  if (h > w) return "请严格按照 " + aspect + " 竖版画幅生成最终图片，整张图片必须为 " + aspect + " 竖向构图，不要正方形，不要横版。";
+  return "请严格按照 " + aspect + " 横版画幅生成最终图片，整张图片必须为 " + aspect + " 横向构图，不要正方形，不要竖版。";
+}
+function imageApiPrompt(prompt, size) {
+  return [prompt, aspectPromptSuffixForSize(size)].filter(Boolean).join("\n\n");
+}
+// 与参考插件 extractImagesFromImageApi 一致：b64_json / base64 / image.b64_json 都认
+function imgItemB64(it) { return (it && (it.b64_json || it.base64 || (it.image && it.image.b64_json))) || null; }
 const MIME = { ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".webp":"image/webp", ".gif":"image/gif" };
 const CAPS = [
   "Seedance 2.5 能力边界（88api，插件已按此硬校验）：",
@@ -333,12 +351,13 @@ function parseChatImages(json) {
   return out;
 }
 // gemini 家族：图片经 /v1/chat/completions 多模态返回（chat 一次一图，n>1 循环）
-async function requestChatImages(cfg, modelId, prompt, n, refs) {
+async function requestChatImages(cfg, modelId, prompt, n, refs, size) {
   const items = [];
+  const text = imageApiPrompt(prompt, size);
   for (let k = 0; k < n; k++) {
     let content;
     if (refs.length) {
-      content = [{ type: "text", text: prompt }];
+      content = [{ type: "text", text }];
       for (const r of refs) {
         const p = resolve(r);
         const buf = readFileSync(p);
@@ -346,7 +365,7 @@ async function requestChatImages(cfg, modelId, prompt, n, refs) {
         const mime = MIME[extname(p).toLowerCase()] || "image/png";
         content.push({ type: "image_url", image_url: { url: "data:" + mime + ";base64," + buf.toString("base64") } });
       }
-    } else content = prompt;
+    } else content = text;
     const res = await api(cfg, "POST", "/v1/chat/completions", { model: modelId, messages: [{ role: "user", content }], modalities: ["text", "image"] });
     const imgs = parseChatImages(res);
     if (!imgs.length) throw new Error("chat 端点未返回图片（" + modelId + "）");
@@ -355,11 +374,12 @@ async function requestChatImages(cfg, modelId, prompt, n, refs) {
   return items;
 }
 async function requestImages(cfg, modelId, prompt, n, size, refs) {
-  if (imgKind(modelId) === "chat") return requestChatImages(cfg, modelId, prompt, n, refs);
+  if (imgKind(modelId) === "chat") return requestChatImages(cfg, modelId, prompt, n, refs, size);
+  const finalPrompt = imageApiPrompt(prompt, size);
   if (refs.length) {
     const fd = new FormData();
     fd.append("model", modelId);
-    fd.append("prompt", prompt);
+    fd.append("prompt", finalPrompt);
     fd.append("n", String(n));
     fd.append("size", size);
     for (const r of refs) {
@@ -367,7 +387,7 @@ async function requestImages(cfg, modelId, prompt, n, size, refs) {
       const buf = readFileSync(p);
       if (buf.length > 8 * 1024 * 1024) die("参考图过大 (>8MB)，请压缩: " + p);
       const mime = MIME[extname(p).toLowerCase()] || "image/png";
-      fd.append("image", new Blob([buf], { type: mime }), "ref" + extname(p));
+      fd.append("image[]", new Blob([buf], { type: mime }), "reference" + extname(p));
     }
     const res = await fetch(cfg.baseUrl + "/v1/images/edits", { method: "POST", headers: { Authorization: "Bearer " + requireKey(cfg) }, body: fd });
     const text = await res.text();
@@ -377,7 +397,7 @@ async function requestImages(cfg, modelId, prompt, n, size, refs) {
     if (!items.length) throw new Error("无图片数据");
     return items;
   }
-  const res = await api(cfg, "POST", "/v1/images/generations", { model: modelId, prompt, n, size });
+  const res = await api(cfg, "POST", "/v1/images/generations", { model: modelId, prompt: finalPrompt, n, size });
   const items = res.data || [];
   if (!items.length) throw new Error("无图片数据");
   return items;
@@ -403,7 +423,8 @@ async function cmdImage(cfg, args) {
     log("[DRY-RUN] 生图兜底链: " + chain.join(" → "));
     for (const id of chain) {
       const m = IMG_MODELS[id] || resolveImgModel(id);
-      log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt, n, size: imgSize(aspect, m.scale), refs }, null, 2));
+      const size = imgSize(aspect, m.scale);
+      log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt: imageApiPrompt(prompt, size), n, size, refs }, null, 2));
     }
     return;
   }
@@ -425,7 +446,8 @@ async function cmdImage(cfg, args) {
   let i = 0;
   for (const it of items) {
     const dest = join(dir, "keyframe_" + Date.now() + "_" + i + ".png");
-    if (it.b64_json) writeFileSync(dest, Buffer.from(it.b64_json, "base64"));
+    const b64 = imgItemB64(it);
+    if (b64) writeFileSync(dest, Buffer.from(b64, "base64"));
     else if (it.url) await download(it.url, dest);
     else continue;
     i++;

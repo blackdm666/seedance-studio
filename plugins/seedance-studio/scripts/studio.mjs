@@ -542,7 +542,7 @@ async function cmdImage(cfg, args) {
       paths.push(dest); sub++;
     }
     if (!paths.length) { log("  [" + (index + 1) + "/" + total + "] FAIL 响应无图片数据（" + r.model.id + "）"); return { index, ok: false, errs: ["响应无图片数据 (" + r.model.id + ")"], fatal: false }; }
-    log("  [" + (index + 1) + "/" + total + "] OK " + r.model.id + " (" + r.spec + ")" + (r.fellBack ? " ←兜底" : "") + " → " + paths.map(basename).join(", "));
+    log("  [" + (index + 1) + "/" + total + "] OK " + r.model.id + " (" + r.spec + ")" + (r.fellBack ? " ←兜底" : "") + " → " + paths.map((p) => basename(p)).join(", "));
     return { index, ok: true, model: r.model, paths };
    } catch (e) { // 存盘/下载异常兜底：单张出错不炸整批
      log("  [" + (index + 1) + "/" + total + "] FAIL 保存异常：" + (e && e.message || e));

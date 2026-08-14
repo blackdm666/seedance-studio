@@ -96,7 +96,7 @@ const CAPS = [
   "  • 默认 gpt-image-2-4k（OpenAI 上游，/v1/images）：16:9 实测出真 4K UHD 3840×2160；方图约 2880²（返回 URL）",
   "  • gemini-3-pro-image（`--model gemini`，pro 模型，Google 上游）：走 /v1/chat/completions 多模态，约 2048² 原生，参考图一致性最强",
   "  • grok-imagine-image-quality（`--model grok`，xAI 上游，/v1/images）：不同上游，OpenAI 通道熔断时的兜底首选",
-  "  • 自动兜底链：默认档失败 → grok（不同上游）→ gemini（chat）依次重试（`--no-fallback` 关闭）；上游熔断/429 会给出恢复时间提示",
+  "  • 自动兜底链：默认档失败 → gemini（chat，不同上游）→ grok（xAI，不同上游）（`--no-fallback` 关闭）；按错误分类分流：确定性错误(401/审核/模型名)立即停并诊断，熔断/容量即时跨上游，瞬时抖动同模型先重试 1 次",
   "  • 不满意画面/参考还原：手动 `--model gemini` 用 pro 模型重试（一致性更强）",
   "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——gpt/grok 走 /v1/images/edits，gemini 走 chat 多模态；功能三保产品/人物一致性首选",
 ];
@@ -114,19 +114,34 @@ function mask(k) { return !k ? "(not set)" : k.slice(0, 6) + "..." + k.slice(-4)
 // die 不再同步 process.exit()——那会在 undici 连接句柄关闭中途触发 Windows libuv 断言崩溃。
 // 改为抛错，由顶层统一打印并设置 exitCode，让事件循环自然收尾。
 function die(msg) { const e = new Error(msg); e.isDie = true; throw e; }
-// 上游熔断/容量类报错 → 给出"非本地问题+恢复时间"的友好提示
+// 生图错误分类（关键词集合沿用参考插件 88api-image-gen 的 isRetryable/isFatal 口径）：
+//   fatal      = 确定性错误（换模型/重试都无用）→ 立即停、诊断
+//   capacity   = 上游熔断/容量耗尽 → 直接跨上游兜底（同模型重试等不到恢复）
+//   transient  = 瞬时网络抖动 → 同模型快速重试 1 次，再不行才跨上游
+function classifyImgError(msg) {
+  const s = String(msg || "").toLowerCase();
+  if (/circuit breaker|temporarily suspended|no active tokens|no available (channel|account)|account pool busy|可用渠道不存在/.test(s)) return "capacity";
+  if (/http 400|http 401|http 403|http 404|http 422|unauthorized|forbidden|invalid api key|incorrect api key|missing api key|invalid parameter|model_not_found|not supported model|content[_ ]?(policy|moderat)|moderation|nsfw|内容审核/.test(s)) return "fatal";
+  if (/http 429|http 502|http 503|http 504|http 524|timeout|rate limit|too many requests|please retry later|temporarily unavailable|overloaded|fetch failed|socket hang up|econnreset|terminated|did not contain|无图片数据|未返回图片/.test(s)) return "transient";
+  return "unknown";
+}
+// 上游熔断/容量类 → 干净的一句诊断（不再解析/显示 "约 N 秒自动恢复"，因兜底已即时旁路该等待）
 function upstreamHint(msg) {
   const s = String(msg || "");
-  if (/circuit breaker|temporarily suspended|no active tokens|auto-recovery|429/i.test(s)) {
-    const m = /auto-recovery probe in ~?(\d+)\s*s/i.exec(s);
-    return "\n[诊断] 88api 上游渠道熔断/容量不足（非你的 Key/提示词/模型名问题）" +
-      (m ? "，约 " + m[1] + " 秒后自动恢复，稍后重试即可。" : "，稍后重试即可。") +
-      " 失败调用不产图、不计费。";
-  }
-  if (/可用渠道不存在|no available channel|503|channel.*(unavailable|suspended)/i.test(s))
-    return "\n[诊断] 上游渠道暂不可用（非本地问题），稍后重试，或换 `--model grok` / `--model gemini`。";
+  if (/circuit breaker|temporarily suspended|no active tokens|no available (channel|account)|可用渠道不存在|503|no available channel/i.test(s))
+    return "\n[诊断] 88api 上游通道熔断/容量不足（非你的 Key/提示词/模型名问题）：已尝试自动切换其他上游；仍不行请稍后重试，或换 `--model gemini` / `--model grok`。失败调用不产图、不计费。";
   return "";
 }
+// 确定性错误的对症提示（换模型也没用，先修这里）
+function fatalHint(msg) {
+  const s = String(msg || "").toLowerCase();
+  if (/http 401|unauthorized|invalid api key|incorrect api key|missing api key/.test(s)) return "\n[诊断] Key 缺失/无效/无权限 → 重设：node studio.mjs --set-key sk-xxxx";
+  if (/content[_ ]?(policy|moderat)|moderation|nsfw|内容审核/.test(s)) return "\n[诊断] 内容审核未通过（非上游故障）→ 调整提示词/参考图后再试，勿反复重交。";
+  if (/model_not_found|not supported model/.test(s)) return "\n[诊断] 模型名/端点不匹配（gemini 家族必须走 chat 端点，插件已自动分流）→ 检查 --model。";
+  if (/http 400|invalid parameter/.test(s)) return "\n[诊断] 请求参数不合法 → 检查 --aspect / --ref（参考图是否可读、是否 >8MB）。";
+  return "\n[诊断] 确定性错误：换模型/重试无用，请按上面报文修正后再试。";
+}
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 function log(msg) { console.log(msg); }
 
 function parseArgs(argv) {
@@ -431,17 +446,34 @@ async function cmdImage(cfg, args) {
 
   let used = primary;
   let items;
+  let fatal = false;
   const label = refs.length ? "参考图生图 " + n + " 张 ←垫图 " + refs.length + " 张" : "生图 " + n + " 张 " + imgSize(aspect, primary.scale);
   const errs = [];
-  for (let idx = 0; idx < chain.length; idx++) {
+  for (let idx = 0; idx < chain.length && !items && !fatal; idx++) {
     const id = chain[idx];
     const m = IMG_MODELS[id] || resolveImgModel(id);
+    const size = imgSize(aspect, m.scale);
     if (idx === 0) log("[submit] " + label + " (" + id + " · " + endpointOf(id) + ")");
     else log("[fallback] " + chain[idx - 1] + " 失败（" + (errs[errs.length - 1] || "").replace(/^[^→]*→\s*/, "") + "）→ 切换 " + id + "（不同上游 · " + endpointOf(id) + "）重试…");
-    try { items = await requestImages(cfg, id, prompt, n, imgSize(aspect, m.scale), refs); used = m; break; }
-    catch (e) { errs.push(id + " → " + e.message); }
+    let attempt = 0;
+    for (;;) {
+      try { items = await requestImages(cfg, id, prompt, n, size, refs); used = m; break; }
+      catch (e) {
+        const cls = classifyImgError(e.message);
+        // ③ 瞬时抖动：同模型快速重试 1 次（不计入 errs，不换上游）
+        if (cls === "transient" && attempt < 1) { attempt++; log("[retry] " + id + " 瞬时抖动（" + e.message + "），同模型重试…"); await sleep(3000); continue; }
+        errs.push(id + " → " + e.message);
+        // ① 确定性错误：换模型/重试都无用 → 停整条链，直接诊断
+        if (cls === "fatal") { fatal = true; }
+        break; // ② 容量/未知/瞬时重试用尽 → 出内循环，走下一个上游
+      }
+    }
   }
-  if (!items) die("生图失败，" + (chain.length > 1 ? "兜底链全部未成" : "已禁用兜底") + "：\n  " + errs.join("\n  ") + upstreamHint(errs.join(" ")));
+  if (!items) {
+    const last = errs.join(" ");
+    if (fatal) die("生图失败（确定性错误，换模型/重试无用，先按诊断修正后再试）：\n  " + errs.join("\n  ") + fatalHint(last));
+    die("生图失败，" + (chain.length > 1 ? "兜底链全部未成" : "已禁用兜底") + "：\n  " + errs.join("\n  ") + upstreamHint(last));
+  }
 
   let i = 0;
   for (const it of items) {
@@ -698,7 +730,7 @@ const cfg = loadConfig();
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
     '  生图:  node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini|grok] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
-    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；失败自动跨上游兜底 grok→gemini；gemini 走 chat 端点、一致性最强，不满意可 --model gemini 重试",
+    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；失败自动跨上游兜底 gemini→grok；gemini 走 chat 端点、一致性最强，不满意可 --model gemini 重试",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape|action] [--fps N] [--no-depth] [--out 目录]",
     "          题材自适应：character=真深度读人物动作/前后景；landscape=运动热图+原帧光色、跳深度(--with-depth 强开)；action=多人骨架(YOLO-pose)+运动+深度读武打连招(--no-pose 关骨架)；auto=都出自己挑。所有模式都出 motion_heat 读运镜"].join("\n"));

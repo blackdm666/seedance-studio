@@ -24,7 +24,8 @@
 - 命令：`node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini|grok] [--ref 参考图 ...] [--no-fallback]`
 - **默认 `gpt-image-2-4k`**（不写 `--model` 即用它，16:9 出真 4K UHD）。**跨上游自动兜底链**：默认档失败（如上游 `503 circuit breaker` / `429 no active tokens`）→ 切 **`gemini-3-pro-image`**（Google，chat 端点）→ 再切 **`grok-imagine-image-quality`**（xAI）依次重试；`--no-fallback` 可关闭。故意选**不同上游**，避免同一 OpenAI 通道熔断时兜底也一起挂。
 - **端点分流是硬约束**：`gpt-image-*` / `grok-imagine-*` 走 `/v1/images/*`；**`gemini-*-image` 必须走 `/v1/chat/completions`**（`modalities:["text","image"]`）——直接把 gemini 丢到 `/v1/images/generations` 会被上游拒：`500 not supported model for image generation, only imagen models are supported`（Google 侧报错透传）。插件已按模型名自动分流。
-- **上游熔断/容量类报错**（`circuit breaker` / `temporarily suspended` / `no active tokens` / `可用渠道不存在`）是 88api 上游容量问题，**非 Key/提示词/模型名问题**，失败调用不产图不计费；CLI 会解析并提示"约 N 秒后自动恢复"，稍后重试即可，别刷。
+- **上游熔断/容量类报错**（`circuit breaker` / `temporarily suspended` / `no active tokens` / `可用渠道不存在`）是 88api 上游容量问题，**非 Key/提示词/模型名问题**，失败调用不产图不计费；此类会**即时跨上游兜底**（gpt→gemini→grok，不同厂商通道），不空等上游 `auto-recovery`；全链都挂再稍后重试，别刷。
+- **生图错误按类型分流**（`classifyImgError`，判定口径同参考插件）：① **确定性错误**（401/无权限、内容审核/nsfw、`model_not_found`/端点不匹配、400 参数）→ **立即停并对症诊断**，换模型/重试都无用；② **熔断/容量** → 即时跨上游兜底；③ **瞬时抖动**（fetch failed / timeout / socket hang up / 502/504）→ **同模型快速重试 1 次**，再不行才跨上游。
 - **不满意画面内容或参考还原度**：手动 `--model gemini` 用 pro 模型重试（一致性更强）——每次成功后 CLI 也会提示这一点。
 - **参考图生图（img2img / 垫图）**：任意个 `--ref <本地图>`。gpt/grok → `POST /v1/images/edits`（multipart，字段 `image[]` 可多次）；gemini → chat 多模态（`image_url` data URL 随 `text` 一起发）。实测：喂一张产品/角色图 + 提示词，能保留主体形态换场景/换光——**功能三保「产品外观/人物身份一致」的首选，一致性以 `gemini-3-pro-image` 最强**。
 - 尺寸：`gpt-image-2-4k` 用 4K 尺寸表（16:9→**3840×2160**、4:3→3264×2448、3:4→2448×3264、1:1→2880²，均 ≤ 后端最长边上限 3840）；`gemini` / `grok` 忽略/近似 size、按原生比例出图。

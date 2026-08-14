@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// seedance-studio CLI — 88api.ai Seedance 2.5 video + gpt-image-2-4k / gemini-3.1-flash-image keyframes
+// seedance-studio CLI — 88api.ai Seedance 2.5 video + gpt-image-2 / gpt-image-2-4k keyframes
 // Zero-dependency Node 18+. Config: ~/.seedance-studio/config.json
 import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -25,40 +25,35 @@ const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
 const IMG_ASPECTS_4K = { "1:1":"2880x2880","3:2":"3520x2352","2:3":"2352x3520","4:3":"3264x2448","3:4":"2448x3264","16:9":"3840x2160","9:16":"2160x3840","2:1":"3840x1920","1:2":"1920x3840","7:4":"3808x2176","4:7":"2176x3808" };
 const IMAGE_MAX_EDGE = 3840;
-// gemini 走 chat 端点，分辨率/比例用「结构化参数」而非像素 size（协议抄自 88api-nano-banana 插件）
-const IMG_RESOLUTIONS = new Set(["1K", "2K", "4K"]);          // extra_body.google.image_config.image_size
-const GEMINI_ASPECTS = new Set(["1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9","21:9"]); // aspect_ratio 取值
-// 生图模型预设（gpt 走 /v1/images/*；gemini 走 /v1/chat/completions 多模态，2026-08 实测）
+// 生图模型预设（gpt-image 家族，全部走 /v1/images/*；2026-08 实测）
 const IMG_MODELS = {
-  "gpt-image-2-4k":             { id: "gpt-image-2-4k",             kind: "images", scale: "4k",     note: "默认·高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）" },
-  "gemini-3.1-flash-image":     { id: "gemini-3.1-flash-image",     kind: "chat",   scale: "native", note: "flash 快版·Gemini 3.1 Flash Image（chat 端点，1K/2K/4K，默认 4K；实测 4K 16:9=5504×3072 JPEG≈9MB，并发5出5张仅53s；比例/分辨率走 image_config；能吃高并发/批量，参考图一致性强，锁角色/垫图可用）" },
+  "gpt-image-2-4k":  { id: "gpt-image-2-4k",  kind: "images", scale: "4k", note: "高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）。注意：88api 侧该模型渠道时有时无，断渠道时自动兜底 gpt-image-2" },
+  "gpt-image-2":     { id: "gpt-image-2",     kind: "images", scale: "2k", note: "稳定 2K 档（16:9≈2048×1152、2:3=1360×2048，返回 URL；OpenAI 上游）；gpt-image-2-4k 断渠道时的兜底主力，出图稳、支持 --ref 垫图/锁角色" },
 };
 // 友好别名 → 预设键
 const IMG_ALIASES = {
   "4k":"gpt-image-2-4k","gpt":"gpt-image-2-4k","gpt-4k":"gpt-image-2-4k","gpt-image-2-4k":"gpt-image-2-4k","default":"gpt-image-2-4k",
-  "gemini":"gemini-3.1-flash-image","gemini-flash":"gemini-3.1-flash-image","flash":"gemini-3.1-flash-image","gemini-3.1-flash-image":"gemini-3.1-flash-image",
+  "2":"gpt-image-2","image2":"gpt-image-2","gpt2":"gpt-image-2","gpt-2":"gpt-image-2","gpt-image-2":"gpt-image-2",
 };
-// 主模型失败时的自动兜底链（跨上游：切 Google Gemini chat 端点，避开同一 OpenAI 通道一起挂）
-const IMG_FALLBACKS = ["gemini-3.1-flash-image"];
+// 主模型失败时的自动兜底：gpt-image-2-4k 渠道挂 → 退到同上游 gpt-image-2（仍是 image2 质量，避免默认链路白跑到无图可用）
+const IMG_FALLBACKS = ["gpt-image-2"];
 // 并发（抄 88api-image-gen：MAX_CONCURRENCY=10、DEFAULTS.concurrency=3）；单 key 默认保守，别把上游打熔断
 const IMG_MAX_CONCURRENCY = 10;
 const IMG_DEFAULT_CONCURRENCY = 3;
-function imgKind(id){ return /gemini/i.test(String(id)) ? "chat" : "images"; }
 function resolveImgModel(name) {
   if (!name) return IMG_MODELS["gpt-image-2-4k"];
   const key = IMG_ALIASES[String(name).toLowerCase()];
   if (key) return IMG_MODELS[key];
   const id = String(name);
-  return { id, kind: imgKind(id), scale: "native", note: "(自定义模型 id，按原生尺寸提交)" };
+  return { id, kind: "images", scale: "native", note: "(自定义模型 id，按原生尺寸提交)" };
 }
 function imgSize(aspect, scale) {
   const table = scale === "4k" ? IMG_ASPECTS_4K : IMG_ASPECTS;
   return table[aspect] || null;
 }
-// 某模型能否出这个画幅：chat(gemini) 看 GEMINI_ASPECTS，images(gpt) 看像素尺寸表（2K/4K 两表键一致）。
-// 校验必须按模型分流——gemini 支持 21:9/4:5/5:4（gpt 表没有），gpt 支持 7:4/2:1（gemini 没有），别拿一张表卡另一个。
-function imgAspectOk(id, aspect) {
-  return imgKind(id) === "chat" ? GEMINI_ASPECTS.has(aspect) : Object.prototype.hasOwnProperty.call(IMG_ASPECTS, aspect);
+// 某模型能否出这个画幅：gpt-image 家族看像素尺寸表（2K/4K 两表键一致）。
+function imgAspectOk(_id, aspect) {
+  return Object.prototype.hasOwnProperty.call(IMG_ASPECTS, aspect);
 }
 // 与参考插件 88api-image-gen 一致：按目标 size 追加"画幅约束"提示词后缀，再拼进最终 prompt
 function gcd(a, b) { a = Math.abs(a); b = Math.abs(b); while (b) { [a, b] = [b, a % b]; } return a; }
@@ -110,12 +105,11 @@ const CAPS = [
   "  • watermark:true —— 被忽略，成片无水印",
   "硬约束（插件已前置校验）：",
   "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
-  "生图（关键帧/锚定图，2026-08 实测）：",
-  "  • 默认 gpt-image-2-4k（OpenAI 上游，/v1/images）：16:9 实测出真 4K UHD 3840×2160；方图约 2880²（返回 URL）",
-  "  • gemini-3.1-flash-image（`--model gemini`，flash 快版，Google 上游）：走 /v1/chat/completions 多模态，支持 1K/2K/4K（`--resolution`，默认 4K；比例/分辨率走 image_config），出图快、适合批量并发，参考图一致性强",
-  "  • 自动兜底链：默认档失败 → gemini（chat，不同上游）（`--no-fallback` 关闭）；按错误分类分流：确定性错误(401/审核/模型名)立即停并诊断，熔断/容量即时跨上游，瞬时抖动同模型先重试 1 次",
-  "  • 不满意画面/参考还原：手动 `--model gemini`（flash 快版）重试（一致性强）",
-  "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——gpt 走 /v1/images/edits，gemini 走 chat 多模态；功能三保产品/人物一致性首选",
+  "生图（关键帧/锚定图，纯 gpt-image 家族，2026-08 实测）：",
+  "  • 默认 gpt-image-2-4k（OpenAI 上游，/v1/images）：16:9 出真 4K UHD 3840×2160；方图约 2880²（返回 URL）。注意：88api 侧该模型渠道时有时无",
+  "  • gpt-image-2（`--model gpt-image-2` / 别名 image2）：稳定 2K 档（16:9≈2048×1152、2:3=1360×2048），出图稳、支持 --ref；gpt-image-2-4k 断渠道时的兜底主力",
+  "  • 自动兜底链：gpt-image-2-4k 失败 → gpt-image-2（同上游备用模型，`--no-fallback` 关闭）；按错误分类分流：确定性错误(401/审核/模型名)立即停并诊断，熔断/容量即时换模型，瞬时抖动同模型先重试 1 次",
+  "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——走 /v1/images/edits；功能三保产品/人物一致性首选",
 ];
 
 function loadConfig() {
@@ -154,7 +148,7 @@ function fatalHint(msg) {
   const s = String(msg || "").toLowerCase();
   if (/http 401|unauthorized|invalid api key|incorrect api key|missing api key/.test(s)) return "\n[诊断] Key 缺失/无效/无权限 → 重设：node studio.mjs --set-key sk-xxxx";
   if (/content[_ ]?(policy|moderat)|moderation|nsfw|内容审核/.test(s)) return "\n[诊断] 内容审核未通过（非上游故障）→ 调整提示词/参考图后再试，勿反复重交。";
-  if (/model_not_found|not supported model/.test(s)) return "\n[诊断] 模型名/端点不匹配（gemini 家族必须走 chat 端点，插件已自动分流）→ 检查 --model。";
+  if (/model_not_found|not supported model/.test(s)) return "\n[诊断] 模型名/端点不匹配 → 检查 --model（仅支持 gpt-image-2-4k / gpt-image-2 或自定义 images 模型 id）。";
   if (/http 400|invalid parameter/.test(s)) return "\n[诊断] 请求参数不合法 → 检查 --aspect / --ref（参考图是否可读、是否 >8MB）。";
   return "\n[诊断] 确定性错误：换模型/重试无用，请按上面报文修正后再试。";
 }
@@ -367,62 +361,8 @@ async function cmdRaw(cfg, args) {
 }
 // ---------- image (keyframes) ----------
 // 单次生图请求（文生图 或 参考图 edits），返回 data[] 数组；失败/无输出抛错供上层回退
-// 从 chat/completions 响应里抽出图片，归一成 {b64_json} / {url}（与 images 端点返回同形，存盘逻辑复用）
-function parseChatImages(json) {
-  const out = [];
-  const msg = json && json.choices && json.choices[0] && json.choices[0].message;
-  if (!msg) return out;
-  const push = (u) => {
-    if (!u) return;
-    const m = /^data:image\/[^;]+;base64,(.+)$/s.exec(u);
-    if (m) out.push({ b64_json: m[1] });
-    else if (/^https?:\/\//i.test(u)) out.push({ url: u });
-  };
-  if (Array.isArray(msg.images)) for (const im of msg.images) push((im && im.image_url && im.image_url.url) || (im && im.url) || (im && im.b64_json ? "data:image/png;base64," + im.b64_json : null));
-  const scan = (s) => {
-    if (typeof s !== "string") return;
-    const re = /(data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+|https?:\/\/[^\s)"'<>]+?\.(?:png|jpe?g|webp)(?:\?[^\s)"'<>]*)?)/gi;
-    let m; while ((m = re.exec(s))) push(m[1]);
-  };
-  if (typeof msg.content === "string") scan(msg.content);
-  else if (Array.isArray(msg.content)) for (const p of msg.content) { if (p && p.type === "image_url" && p.image_url) push(p.image_url.url); if (p && typeof p.text === "string") scan(p.text); }
-  return out;
-}
-// gemini 家族：图片经 /v1/chat/completions 多模态返回（chat 一次一图，n>1 循环）
-// 请求协议抄自 88api-nano-banana 插件：不传像素 size、不传 n、不加中文画幅后缀；
-// 用 extra_body.google.image_config.{aspect_ratio,image_size} 控制比例与分辨率（image_size=1K|2K|4K，4K 由此得到）
-async function requestChatImages(cfg, modelId, prompt, n, refs, aspect, resolution) {
-  const items = [];
-  const text = String(prompt).trim();
-  const aspect_ratio = GEMINI_ASPECTS.has(aspect) ? aspect : "16:9";
-  const image_size = IMG_RESOLUTIONS.has(resolution) ? resolution : "4K";
-  for (let k = 0; k < n; k++) {
-    let content;
-    if (refs.length) {
-      content = [{ type: "text", text }];
-      for (const r of refs) {
-        const p = resolve(r);
-        const buf = readFileSync(p);
-        if (buf.length > 8 * 1024 * 1024) die("参考图过大 (>8MB)，请压缩: " + p);
-        const mime = MIME[extname(p).toLowerCase()] || "image/png";
-        content.push({ type: "image_url", image_url: { url: "data:" + mime + ";base64," + buf.toString("base64") } });
-      }
-    } else content = text;
-    const body = {
-      model: modelId,
-      messages: [{ role: "user", content }],
-      modalities: ["text", "image"],
-      extra_body: { google: { image_config: { aspect_ratio, image_size } } },
-    };
-    const res = await api(cfg, "POST", "/v1/chat/completions", body);
-    const imgs = parseChatImages(res);
-    if (!imgs.length) throw new Error("chat 端点未返回图片（" + modelId + "）");
-    items.push(...imgs);
-  }
-  return items;
-}
-async function requestImages(cfg, modelId, prompt, n, size, refs, aspect, resolution) {
-  if (imgKind(modelId) === "chat") return requestChatImages(cfg, modelId, prompt, n, refs, aspect, resolution);
+// ---------- image request（仅 gpt-image 家族，走 /v1/images/*；文生图 generations、参考图 edits） ----------
+async function requestImages(cfg, modelId, prompt, n, size, refs) {
   const finalPrompt = imageApiPrompt(prompt, size);
   if (refs.length) {
     const fd = new FormData();
@@ -470,7 +410,7 @@ async function runImagePool(total, concurrency, runTask) {
 }
 // 单张生成流水线：主模型 → 跨上游兜底链，含错误分类（确定性停链 / 瞬时同模型重试 1 次 / 容量换上游）。返回 1 张的原始 item。
 async function generateOneImage(cfg, slot) {
-  const { prompt, aspect, resolution, refs, chain } = slot;
+  const { prompt, aspect, refs, chain } = slot;
   const errs = [];
   let fatal = false;
   for (let idx = 0; idx < chain.length && !fatal; idx++) {
@@ -481,8 +421,8 @@ async function generateOneImage(cfg, slot) {
     let attempt = 0;
     for (;;) {
       try {
-        const items = await requestImages(cfg, id, prompt, 1, size, refs, aspect, resolution);
-        return { ok: true, model: m, items, spec: imgKind(id) === "chat" ? (aspect + " " + resolution) : size, fellBack: idx > 0 };
+        const items = await requestImages(cfg, id, prompt, 1, size, refs);
+        return { ok: true, model: m, items, spec: size, fellBack: idx > 0 };
       } catch (e) {
         const cls = classifyImgError(e.message);
         if (cls === "transient" && attempt < 1) { attempt++; await sleep(3000); continue; } // ③ 瞬时抖动：同模型重试 1 次
@@ -500,11 +440,8 @@ async function cmdImage(cfg, args) {
   const aspect = String(args.aspect || "16:9");
   const primary = resolveImgModel(args.model);
   if (!imgAspectOk(primary.id, aspect)) {
-    const ok = imgKind(primary.id) === "chat" ? [...GEMINI_ASPECTS] : Object.keys(IMG_ASPECTS);
-    die("aspect 对 " + primary.id + " 仅支持: " + ok.join(", "));
+    die("aspect 对 " + primary.id + " 仅支持: " + Object.keys(IMG_ASPECTS).join(", "));
   }
-  const resolution = String(args.resolution || "4K").toUpperCase(); // 仅 gemini(chat) 用；1K/2K/4K
-  if (!IMG_RESOLUTIONS.has(resolution)) die("--resolution 仅支持 1K / 2K / 4K（仅对 --model gemini 生效）");
   const n = args.n ? parseInt(args.n, 10) : 1;
   if (!(n >= 1 && n <= 4)) die("--n 限 1–4（每个 --prompt 出几张）");
   const concurrency = args.concurrency ? parseInt(args.concurrency, 10) : IMG_DEFAULT_CONCURRENCY;
@@ -516,13 +453,13 @@ async function cmdImage(cfg, args) {
   const noFallback = !!args["no-fallback"];
   // 兜底链：主模型 + 跨上游兜底（去重、去掉与主模型同款）。--no-fallback 只留主模型。
   const chain = noFallback ? [primary.id] : [primary.id, ...IMG_FALLBACKS.filter(f => f !== primary.id)];
-  const endpointOf = (id) => imgKind(id) === "chat" ? "/v1/chat/completions (多模态)" : (refs.length ? "/v1/images/edits (multipart)" : "/v1/images/generations");
+  const endpointOf = () => refs.length ? "/v1/images/edits (multipart)" : "/v1/images/generations";
 
   // 批次：每个提示词各出 n 张 → 总槽位；并发池并行跑（抄 88api-image-gen 的 dispatcher×N 结构）
   const slots = [];
   for (let p = 0; p < prompts.length; p++)
     for (let k = 0; k < n; k++)
-      slots.push({ prompt: prompts[p], aspect, resolution, refs, chain });
+      slots.push({ prompt: prompts[p], aspect, refs, chain });
   const total = slots.length;
   const lanes = Math.min(concurrency, total);
 
@@ -530,18 +467,14 @@ async function cmdImage(cfg, args) {
     log("[DRY-RUN] 生图 " + total + " 张（" + prompts.length + " 提示词 × " + n + "）· 并发 " + lanes + " · 兜底链 " + chain.join(" → "));
     for (const id of chain) {
       const m = IMG_MODELS[id] || resolveImgModel(id);
-      if (imgKind(id) === "chat") // gemini：chat 端点结构化参数（不含像素 size / n）
-        log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt: prompts[0], aspect_ratio: GEMINI_ASPECTS.has(aspect) ? aspect : "16:9", image_size: resolution, refs }, null, 2));
-      else {
-        const size = imgSize(aspect, m.scale);
-        log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt: imageApiPrompt(prompts[0], size), n: 1, size, refs }, null, 2));
-      }
+      const size = imgSize(aspect, m.scale);
+      log(JSON.stringify({ model: m.id, endpoint: cfg.baseUrl + endpointOf(m.id), note: m.note, prompt: imageApiPrompt(prompts[0], size), n: 1, size, refs }, null, 2));
     }
     if (prompts.length > 1) log("... 其余 " + (prompts.length - 1) + " 个提示词同构，每次请求单张（n 靠并发池循环）");
     return;
   }
 
-  const primarySpec = imgKind(primary.id) === "chat" ? (aspect + " " + resolution) : imgSize(aspect, primary.scale);
+  const primarySpec = imgSize(aspect, primary.scale);
   const submit = refs.length ? "参考图生图 " + total + " 张 ←垫图 " + refs.length + " 张" : "生图 " + total + " 张 " + primarySpec;
   log("[submit] " + submit + "（" + prompts.length + " 提示词 × " + n + "，并发 " + lanes + "）· 主模型 " + primary.id
     + (noFallback ? "（--no-fallback，无兜底）" : " → 兜底 " + chain.slice(1).join("/")) + " · " + endpointOf(primary.id));
@@ -595,7 +528,7 @@ async function cmdImage(cfg, args) {
     const last = failResults.flatMap((r) => r.errs).join(" ");
     if (failResults.some((r) => r.fatal)) log(fatalHint(last)); else log(upstreamHint(last));
   }
-  if (!refs.length && !okResults.some((r) => r.model.id === "gemini-3.1-flash-image")) log("[提示] 对画面/参考还原不满意？加 --model gemini（flash 快版，一致性强）重试。");
+  if (!refs.length) log("[提示] 想锁角色/产品一致性？加 --ref <图> 垫图重出；对清晰度不满意可换 --model gpt-image-2-4k 重试。");
 }
 // ---------- concat (ffmpeg) ----------
 function cmdConcat(cfg, args) {
@@ -838,9 +771,9 @@ const cfg = loadConfig();
     "          [--image 本地图或URL ...最多30] [--video-url URL] [--audio-url URL]",
     "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
-    '  生图:  node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model 4k|gemini] [--resolution 1K|2K|4K] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
+    '  生图:  node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model 4k|gpt-image-2] [--ref 参考图 ...] [--no-fallback] [--dry-run]',
     "          多张并发：重复 --prompt 出多张不同图，或 --n 每个提示词出几张；总量 = 提示词数 × n，用并发池并行跑（默认并发 3、上限 10）",
-    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；失败自动兜底 gemini（chat 端点·支持 4K，--resolution 调档，一致性最强）；不满意可 --model gemini 重试",
+    "          默认 gpt-image-2-4k(16:9 出真 4K UHD)；断渠道自动兜底 gpt-image-2(稳定 2K)；均走 /v1/images，支持 --ref 垫图锁角色",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape|action] [--fps N] [--no-depth] [--out 目录]",
     "          题材自适应：character=真深度读人物动作/前后景；landscape=运动热图+原帧光色、跳深度(--with-depth 强开)；action=多人骨架(YOLO-pose)+运动+深度读武打连招(--no-pose 关骨架)；auto=都出自己挑。所有模式都出 motion_heat 读运镜"].join("\n"));

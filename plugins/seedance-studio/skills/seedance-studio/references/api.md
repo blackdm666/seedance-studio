@@ -10,29 +10,25 @@
 | 视频模型名 | `seedance2.5满血版`（必须精确匹配） |
 | 提交任务 | `POST /v1/videos` |
 | 查询任务 | `GET /v1/videos/{id}` |
-| 生图 | `POST /v1/images/generations`（gpt 文生图）· `POST /v1/images/edits`（gpt 参考图，multipart）· `POST /v1/chat/completions`（**gemini 生图走这里**，多模态，图片以 data URL 内嵌在回复里） |
+| 生图 | `POST /v1/images/generations`（gpt 文生图）· `POST /v1/images/edits`（gpt 参考图/垫图，multipart） |
 | 鉴权 | `Authorization: Bearer sk-xxxx` |
 
-## 生图模型（关键帧 / 锚定图，2026-08 实测）
+## 生图模型（关键帧 / 锚定图，gpt-image 家族，2026-08 实测）
 
 | 别名 | 模型 id | 端点/返回 | 输出实测 | 用途 |
 |---|---|---|---|---|
-| （**默认**） | `gpt-image-2-4k` | `/v1/images/generations` / **url**（Adobe Firefly S3，OpenAI 上游） | **16:9=3840×2160 真 4K UHD**；方图约 2880² | 高清主图 / 海报 / 产品图 / 锚定图（默认档） |
-| `gemini`（flash） | `gemini-3.1-flash-image` | **`/v1/chat/completions`** 多模态 / 图片以 `data:image/*;base64` 内嵌在 `message.content` | 由 `image_config.image_size` 指定 1K/2K/4K（插件默认 4K）；**实测 4K 16:9=5504×3072（16.9MP）但返回 JPEG≈9MB**（非 PNG，有损但更小更快）；**能吃高并发**：并发 5 出 5 张仅 53s（单发 71s） | 参考图一致性强；垫图 / 锁角色 / 锁产品；**默认档失败时首选兜底 & 不满意时手动切它 & 批量出图首选** |
+| （**默认**）`4k`/`gpt` | `gpt-image-2-4k` | `/v1/images/generations` / **url**（Adobe Firefly S3，OpenAI 上游） | **16:9=3840×2160 真 4K UHD**；方图约 2880² | 高清主图 / 海报 / 产品图 / 锚定图（默认档）。**注意：88api 侧该模型渠道时有时无**（断渠道回 `500 … 可用渠道不存在`），断时自动兜底 `gpt-image-2` |
+| `2`/`image2`/`gpt2` | `gpt-image-2` | `/v1/images/generations`（`--ref` 时 `/v1/images/edits` multipart） / **url PNG** | **稳定 2K 档**：16:9≈2048×1152、2:3=1360×2048、方图 2048² | 稳定出图主力；`gpt-image-2-4k` 断渠道时的兜底；**支持 `--ref` 垫图/锁角色/锁产品** |
 
-- 命令：`node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model 4k|gemini] [--resolution 1K|2K|4K] [--ref 参考图 ...] [--no-fallback]`
-- **批量并发出图**：可重复 `--prompt` 出多张不同图，或 `--n` 每个提示词出几张；**总量 = 提示词数 × n**，交给并发池并行跑（`--concurrency` 默认 3、上限 10）。**并发结构抄自 `88api-image-gen`**（`MAX_CONCURRENCY=10`、默认 `concurrency=3`）：`N` 个 dispatcher 从共享游标拉任务，`Promise.all(Array.from({length:N}, dispatcher))`，跑完一个立刻拉下一个；单 key 场景已裁掉参考插件的多 worker/粘性分组。**每张都是独立单图请求**（gpt 也不再用服务端 `n` 批量），各自独立走兜底链与重试，单张失败/存盘异常不炸整批；输出文件名 `keyframe_<批次时间戳>_<槽位序号>.png`。默认并发保守（3），是为了别把单 key 的上游打到熔断（429/circuit breaker）；批量越大越要留意上游容量。
-- **默认 `gpt-image-2-4k`**（不写 `--model` 即用它，16:9 出真 4K UHD）。**跨上游自动兜底链**：默认档失败（如上游 `503 circuit breaker` / `429 no active tokens`）→ 切 **`gemini-3.1-flash-image`**（Google，chat 端点）；`--no-fallback` 可关闭。故意选**不同上游**，避免同一 OpenAI 通道熔断时兜底也一起挂。
-- **gemini 请求协议抄自 `88api-nano-banana` 插件**（与 gpt 的 Images API 不同，别混）：走 `/v1/chat/completions`，body = `{ model, messages:[{role:"user", content}], modalities:["text","image"], extra_body:{ google:{ image_config:{ aspect_ratio, image_size } } } }`。**关键点**：① 分辨率靠 `image_size`（`1K`/`2K`/`4K`）——**gemini 的 4K 就是 `image_size:"4K"` 请求出来的**，不是像素 `size`；② 比例靠 `aspect_ratio`（`1:1/2:3/3:2/3:4/4:3/4:5/5:4/9:16/16:9/21:9`）；③ **不传 `size`、不传 `n`**（n 靠循环）；④ **不往提示词加中文画幅后缀**（gpt 才加，gemini 用结构化参数）；⑤ 无参考图时 `content` 是纯字符串、有参考图才是 `[text, image_url…]` 数组。插件 `--resolution` 默认 `4K`。
-- **端点分流是硬约束**：`gpt-image-*` 走 `/v1/images/*`；**`gemini-*-image` 必须走 `/v1/chat/completions`**（`modalities:["text","image"]`）——直接把 gemini 丢到 `/v1/images/generations` 会被上游拒：`500 not supported model for image generation, only imagen models are supported`（Google 侧报错透传）。插件已按模型名自动分流。
-- **上游熔断/容量类报错**（`circuit breaker` / `temporarily suspended` / `no active tokens` / `可用渠道不存在`）是 88api 上游容量问题，**非 Key/提示词/模型名问题**，失败调用不产图不计费；此类会**即时跨上游兜底**（gpt→gemini，不同厂商通道），不空等上游 `auto-recovery`；全链都挂再稍后重试，或前往 https://88api.ai 后台联系客服。
-- **生图错误按类型分流**（`classifyImgError`，判定口径同参考插件）：① **确定性错误**（401/无权限、内容审核/nsfw、`model_not_found`/端点不匹配、400 参数）→ **立即停并对症诊断**，换模型/重试都无用；② **熔断/容量** → 即时跨上游兜底；③ **瞬时抖动**（fetch failed / timeout / socket hang up / 502/504）→ **同模型快速重试 1 次**，再不行才跨上游。
-- **不满意画面内容或参考还原度**：手动 `--model gemini`（flash 快版）重试（一致性强）——每次成功后 CLI 也会提示这一点。
-- **参考图生图（img2img / 垫图）**：任意个 `--ref <本地图>`。gpt → `POST /v1/images/edits`（multipart，字段 `image[]` 可多次）；gemini → chat 多模态（`image_url` data URL 随 `text` 一起发）。实测：喂一张产品/角色图 + 提示词，能保留主体形态换场景/换光——**功能三保「产品外观/人物身份一致」的首选，一致性以 `gemini-3.1-flash-image`（flash 快版）为佳**。
-- 尺寸：`gpt-image-2-4k` 用 4K 像素尺寸表（16:9→**3840×2160**、4:3→3264×2448、3:4→2448×3264、1:1→2880²，均 ≤ 后端最长边上限 3840）；`gemini` **不用像素 size**，用 `image_config.image_size`（`1K`/`2K`/`4K`，插件默认 4K）+ `aspect_ratio` 出图。
-- **请求格式对齐两款参考插件（各管各的模型）**：
-  - **gpt 路径抄 `88api-image-gen`**（Images API）：① 尺寸表 = 该插件 `SIZE_MATRIX`（2K/4K 逐档一致，4K 不是把 2K 翻倍——翻倍会超 3840 最长边被上游拒）；② 提示词尾部追加"画幅约束"后缀（`请严格按照 W:H … 画幅生成…`）压稳比例；③ 参考图走 multipart `image[]`；④ 返回解析兼容 `b64_json`/`base64`/`image.b64_json`/`url`。
-  - **gemini 路径抄 `88api-nano-banana`**（Chat Completions）：`extra_body.google.image_config.{aspect_ratio,image_size}`，`image_size` 取 `1K/2K/4K`，**不传 `size`/`n`、不加中文后缀**（详见上文 gemini 协议）。
+- 命令：`node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model 4k|gpt-image-2] [--ref 参考图 ...] [--no-fallback]`
+- **批量并发出图**：可重复 `--prompt` 出多张不同图，或 `--n` 每个提示词出几张；**总量 = 提示词数 × n**，交给并发池并行跑（`--concurrency` 默认 3、上限 10）。**并发结构抄自 `88api-image-gen`**（`MAX_CONCURRENCY=10`、默认 `concurrency=3`）：`N` 个 dispatcher 从共享游标拉任务，`Promise.all(Array.from({length:N}, dispatcher))`，跑完一个立刻拉下一个；单 key 场景已裁掉参考插件的多 worker/粘性分组。**每张都是独立单图请求**（不用服务端 `n` 批量），各自独立走兜底链与重试，单张失败/存盘异常不炸整批；输出文件名 `keyframe_<批次时间戳>_<槽位序号>.png`。默认并发保守（3），是为了别把单 key 的上游打到熔断（429/circuit breaker）；批量越大越要留意上游容量。
+- **默认 `gpt-image-2-4k`**（不写 `--model` 即用它，16:9 出真 4K UHD）。**兜底链**：默认档失败（`500 … 可用渠道不存在` 断渠道 / `503 circuit breaker` / `429 no active tokens`）→ 自动切 **`gpt-image-2`**（同 OpenAI 上游、稳定 2K 渠道）；`--no-fallback` 可关闭。**2026-08 实测 `gpt-image-2-4k` 在 88api 侧渠道时有时无、断渠道是常态**，兜底 `gpt-image-2` 是当前出图主力。
+- **两档都走 Images API**（`/v1/images/*`，OpenAI 协议，别再混 chat 端点）：文生图 `POST /v1/images/generations`；带 `--ref` 的垫图/改图 `POST /v1/images/edits`（multipart，字段 `image[]` 可多次）。返回解析兼容 `b64_json`/`base64`/`image.b64_json`/`url`。
+- **上游熔断/容量类报错**（`circuit breaker` / `temporarily suspended` / `no active tokens` / `可用渠道不存在`）是 88api 上游容量/渠道问题，**非 Key/提示词/模型名问题**，失败调用不产图不计费；此类会**自动切档兜底**（`gpt-image-2-4k`→`gpt-image-2`），全链都挂再稍后重试，或前往 https://88api.ai 后台联系客服。
+- **生图错误按类型分流**（`classifyImgError`，判定口径同参考插件）：① **确定性错误**（401/无权限、内容审核/nsfw、`model_not_found`/端点不匹配、400 参数）→ **立即停并对症诊断**，换模型/重试都无用；② **熔断/容量/断渠道** → 自动切档兜底；③ **瞬时抖动**（fetch failed / timeout / socket hang up / 502/504）→ **同模型快速重试 1 次**，再不行才切档。
+- **不满意画面内容或参考还原度**：手动 `--ref <首图>` 垫图重出（锁角色/产品一致性），或 `--model gpt-image-2-4k` 换更高清档重试——每次成功后 CLI 也会提示这一点。
+- **参考图生图（img2img / 垫图）**：任意个 `--ref <本地图>` → `POST /v1/images/edits`（multipart，字段 `image[]` 可多次）。实测：喂一张产品/角色图 + 提示词，能保留主体形态换场景/换光——**功能三保「产品外观/人物身份一致」的首选**（`gpt-image-2` 实测 2MB PNG 垫图稳定）。
+- 尺寸：`gpt-image-2-4k` 用 4K 像素尺寸表（16:9→**3840×2160**、4:3→3264×2448、3:4→2448×3264、1:1→2880²，均 ≤ 后端最长边上限 3840）；`gpt-image-2` 用 2K 像素尺寸表（16:9≈2048×1152、2:3=1360×2048、1:1=2048²）。**尺寸表 = `88api-image-gen` 的 `SIZE_MATRIX`（2K/4K 逐档一致，4K 不是把 2K 翻倍——翻倍会超 3840 最长边被上游拒）**；提示词尾部追加"画幅约束"后缀（`请严格按照 W:H … 画幅生成…`）压稳比例；参考图走 multipart `image[]`。
 - 计费按 token（`usage.output_tokens` 的 image_tokens）——**批量出锚定图前先 1 张试方向**。
 
 ## 视频能力边界

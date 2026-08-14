@@ -30,14 +30,14 @@
 - 场景/风格参考帧：还原原片的空间、光线、色调基准。
 
 **生图模型选型（默认 4k，按需切换）：**
-- 默认 / 出高清主图 / 海报级锚定图：`gpt-image-2-4k`（16:9 出真 4K UHD）——**不写 `--model` 就是它**；不可用/失败自动切 flash 快版。
-- **画面内容或参考还原不满意、或要同一角色/产品出多张一致的图**：`--model gemini`（`gemini-3.1-flash-image`，flash 快版）+ `--ref <首图>` —— 先出 1 张新身份锚定图，再用它当 `--ref` 生成其余角度/场景，人物脸与产品形态保持一致（参考图一致性 flash 快版为佳）。这解决复刻里"锚定图跨镜漂"的老问题。
+- 默认 / 出高清主图 / 海报级锚定图：`gpt-image-2-4k`（16:9 出真 4K UHD）——**不写 `--model` 就是它**；88api 侧该模型渠道时有时无，断渠道自动兜底同上游的 `gpt-image-2`（稳定 2K）。
+- **画面内容或参考还原不满意、或要同一角色/产品出多张一致的图**：用 `--ref <首图>` 垫图 —— 先出 1 张新身份锚定图，再用它当 `--ref` 生成其余角度/场景，人物脸与产品形态保持一致（走 `/v1/images/edits`，参考图一致性好；断渠道时链路会从 `gpt-image-2-4k` 自动退到 `gpt-image-2`）。这解决复刻里"锚定图跨镜漂"的老问题。
 
   ```powershell
   # ① 先生成新身份主锚定图（默认 gpt-image-2-4k）
   node studio.mjs image --prompt "<新人物设定>" --out assets
-  # ② 用主图当垫图，出其它角度/场景，锁住同一张脸（切 flash 快版）
-  node studio.mjs image --prompt "<同一人物，换到厨房侧身中景>" --model gemini --ref "assets/keyframe_xxx.png" --out assets
+  # ② 用主图当垫图，出其它角度/场景，锁住同一张脸（--ref 走 /v1/images/edits）
+  node studio.mjs image --prompt "<同一人物，换到厨房侧身中景>" --model gpt-image-2 --ref "assets/keyframe_xxx.png" --out assets
   ```
 
 > **批量并发**：多张锚定图 / 多套方案不用逐张来——重复 `--prompt` 或加 `--n` 一次提交，插件用并发池并行跑（`--concurrency` 默认 3、上限 10），每张独立走兜底链、单张失败不炸整批，比串行快数倍。

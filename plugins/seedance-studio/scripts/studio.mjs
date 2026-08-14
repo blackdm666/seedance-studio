@@ -31,7 +31,7 @@ const GEMINI_ASPECTS = new Set(["1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16"
 // 生图模型预设（gpt 走 /v1/images/*；gemini 走 /v1/chat/completions 多模态，2026-08 实测）
 const IMG_MODELS = {
   "gpt-image-2-4k":             { id: "gpt-image-2-4k",             kind: "images", scale: "4k",     note: "默认·高清主图/海报（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）" },
-  "gemini-3-pro-image":         { id: "gemini-3-pro-image",         kind: "chat",   scale: "native", note: "pro 模型·Gemini 3 Pro Image（chat 端点，支持 1K/2K/4K，默认 4K；比例/分辨率走 image_config；参考图一致性最强，锁角色/垫图首选）" },
+  "gemini-3-pro-image":         { id: "gemini-3-pro-image",         kind: "chat",   scale: "native", note: "pro 模型·Gemini 3 Pro Image（chat 端点，1K/2K/4K，默认 4K；实测 4K 16:9=5504×3072；比例/分辨率走 image_config；参考图一致性最强，锁角色/垫图首选）" },
 };
 // 友好别名 → 预设键
 const IMG_ALIASES = {

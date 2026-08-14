@@ -18,7 +18,7 @@
 | 别名 | 模型 id | 端点/返回 | 输出实测 | 用途 |
 |---|---|---|---|---|
 | （**默认**） | `gpt-image-2-4k` | `/v1/images/generations` / **url**（Adobe Firefly S3，OpenAI 上游） | **16:9=3840×2160 真 4K UHD**；方图约 2880² | 高清主图 / 海报 / 产品图 / 锚定图（默认档） |
-| `gemini`（pro） | `gemini-3-pro-image` | **`/v1/chat/completions`** 多模态 / 图片以 `data:image/png;base64` 内嵌在 `message.content` | 支持 **1K / 2K / 4K**（由 `image_config.image_size` 指定；不传时默认 1K≈1376×768） | 参考图一致性最强；垫图 / 锁角色 / 锁产品；**默认档失败时首选兜底 & 不满意时手动切它** |
+| `gemini`（pro） | `gemini-3-pro-image` | **`/v1/chat/completions`** 多模态 / 图片以 `data:image/png;base64` 内嵌在 `message.content` | **实测 4K 16:9=5504×3072（16.9MP，比 UHD 还大）**；由 `image_config.image_size` 指定 1K/2K/4K，不传时默认 1K≈1376×768 | 参考图一致性最强；垫图 / 锁角色 / 锁产品；**默认档失败时首选兜底 & 不满意时手动切它** |
 
 - 命令：`node studio.mjs image --prompt "..." [--aspect 16:9] [--n 1-4] [--model 4k|gemini] [--resolution 1K|2K|4K] [--ref 参考图 ...] [--no-fallback]`
 - **默认 `gpt-image-2-4k`**（不写 `--model` 即用它，16:9 出真 4K UHD）。**跨上游自动兜底链**：默认档失败（如上游 `503 circuit breaker` / `429 no active tokens`）→ 切 **`gemini-3-pro-image`**（Google，chat 端点）；`--no-fallback` 可关闭。故意选**不同上游**，避免同一 OpenAI 通道熔断时兜底也一起挂。

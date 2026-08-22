@@ -49,9 +49,16 @@
 
 ![复制 88API Key](docs/assets/88api-copy-key.png)
 
-### 4. 配置并检查插件
+### 4. 让 Agent 一键配置（推荐）
 
-在仓库根目录运行：
+安装插件后直接向 **88API-Seedance-Studio** 描述视频需求。Agent 会先自动检查 Key；如果尚未配置，它会主动请你提供完整 Key。你只需把 Key 发给 Agent，Agent 会自动保存、脱敏核验并继续原任务，不需要打开 PowerShell。
+
+Key 会保存在本机 `~/.seedance-studio/config.json`。Agent 不会在回复中显示完整 Key，验证过程也不会发起付费生成任务。
+
+> 仅在自己信任的 Codex 任务中提供 Key，不要把 Key 发布到 GitHub Issue、公开聊天、仓库文件或截图中。
+
+<details>
+<summary>高级用户：手动配置命令</summary>
 
 ```powershell
 node plugins/seedance-studio/scripts/studio.mjs --set-key "<YOUR_88API_KEY>"
@@ -60,12 +67,12 @@ node plugins/seedance-studio/scripts/studio.mjs --self-test
 node plugins/seedance-studio/scripts/studio.mjs --caps
 ```
 
-Key 会保存在本机 `~/.seedance-studio/config.json`，配置输出会自动隐藏完整 Key。`--self-test` 只检查接口与模型列表（并打印 Seedance 2.5 能力边界），不会发起付费生成任务；`--caps` 免 Key 离线查看能力边界（时长 4–30 秒 / 720P / 图 30·视频 10·音频 10 参考）。
+</details>
 
 ## 快速开始
 
 1. 安装插件（本仓库为标准 Codex 插件市场结构）。
-2. 按上方流程创建并配置 88API Key（只需一次）。
+2. 直接描述视频需求；如未配置 Key，按 Agent 提示把 Key 发给它，由 Agent 一键完成配置。
 3. 在 Codex 新任务里说人话：
 
 ```text

@@ -15,9 +15,15 @@ description: 三大工作流的一站式短片工作室（基于 88api.ai 的 Se
 node "<PLUGIN_ROOT>/scripts/studio.mjs" <参数>
 ```
 
-## 首次使用检查
+## 首次使用与 Key 一键配置
 
-按需运行免费命令：`--get-config`（Key 已脱敏）、`--self-test`（验证 Key 与模型分组，不计费）。未配置 Key 时告诉用户去 [88api.ai](https://88api.ai/) 创建 Key 并执行 `--set-key "<Key>"`。绝不将真实 Key 写入源码、日志或对话回显。
+1. 在任何需要调用 88API 的任务前，主动运行 `--get-config` 检查本机配置。已有 Key 时直接继续，不要重复索取。
+2. 未配置 Key 时停止付费请求，但**不要让用户运行 PowerShell 或复制配置命令**。直接告诉用户：`还差一个 88API Key，我可以帮你一键配置。请到 https://88api.ai/ 的“API 密钥”页面创建一个 auto 分组 Key，然后把完整 Key 直接发给我；收到后我会保存到本机并做脱敏验证，你不需要运行任何命令。`
+3. 等待用户提供 Key。收到后由你运行 `node "<PLUGIN_ROOT>/scripts/studio.mjs" --set-key "<KEY>"` 完成本地保存，再运行 `--get-config` 与 `--self-test`。这些检查不发起付费生成。
+4. 把 Key 视为敏感信息：不要在回复、进度消息或命令结果摘要中复述完整 Key，不要写入源码、项目文件或日志；只报告脱敏状态与配置文件路径。配置失败时说明错误类型并重新索取可用 Key，不得回显旧 Key。
+5. 配置成功后自动继续用户原来的出片或反推任务，不要让用户重新描述需求。
+
+用户只应在自己信任的 Codex 任务里提供 Key，不要把 Key 发布到 GitHub Issue、公开聊天或截图中。
 
 ## 项目目录约定
 

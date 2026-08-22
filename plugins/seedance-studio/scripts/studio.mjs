@@ -153,7 +153,7 @@ function upstreamHint(msg) {
 // 确定性错误的对症提示（换模型也没用，先修这里）
 function fatalHint(msg) {
   const s = String(msg || "").toLowerCase();
-  if (/http 401|unauthorized|invalid api key|incorrect api key|missing api key/.test(s)) return "\n[诊断] Key 缺失/无效/无权限 → 重设：node studio.mjs --set-key sk-xxxx";
+  if (/http 401|unauthorized|invalid api key|incorrect api key|missing api key/.test(s)) return "\n[诊断] Key 缺失、无效或无权限。通过 Codex 使用时，请把可用的 88API Key 交给 Agent，由 Agent 一键重设并脱敏验证。";
   if (/content[_ ]?(policy|moderat)|moderation|nsfw|内容审核/.test(s)) return "\n[诊断] 内容审核未通过（非上游故障）→ 调整提示词/参考图后再试，勿反复重交。";
   if (/model_not_found|not supported model/.test(s)) return "\n[诊断] 模型名/端点不匹配 → 检查 --model（仅支持 gpt-image-2-4k / gpt-image-2 或自定义 images 模型 id）。";
   if (/http 400|invalid parameter/.test(s)) return "\n[诊断] 请求参数不合法 → 检查 --aspect / --ref（参考图是否可读、是否 >8MB）。";
@@ -183,7 +183,7 @@ function parseArgs(argv) {
 function asArray(v) { return v === undefined ? [] : Array.isArray(v) ? v : [v]; }
 
 function requireKey(cfg) {
-  if (!cfg.apiKey) die('未配置 API Key。先运行: node studio.mjs --set-key "<你的88api Key>"');
+  if (!cfg.apiKey) die('未配置 API Key。通过 Codex 使用时，请把 88API Key 发给 Agent，由 Agent 为你一键配置；无需自己运行 PowerShell。');
   return cfg.apiKey;
 }
 async function api(cfg, method, path, body) {

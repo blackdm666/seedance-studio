@@ -1,6 +1,6 @@
 {
   "name": "seedance-studio",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "基于 88API 的 Seedance 2.5 短片工作室：一句话生成单条短片与 TVC/广告片（文生/图生、多镜拆段拼接），外加视频提示词反推与可复刻工程包。专注单条成片，不做多集连续剧。",
   "homepage": "https://88api.ai/",
   "author": {
@@ -18,6 +18,6 @@
     "brandColor": "#55A6A5",
     "composerIcon": "./assets/composer-icon.png",
     "logo": "./assets/plugin-logo.png",
-    "defaultPrompt": "使用 $seedance-studio：把我的想法做成一条短片或 TVC；或反推我给的视频的提示词。"
+    "defaultPrompt": "使用 $seedance-studio：把我的想法做成一条短片或 TVC，或反推视频提示词。开始前自动检查 88API Key；若未配置，主动让我提供 Key，并由你一键保存和脱敏验证，不要让我运行 PowerShell。"
   }
 }

@@ -38,6 +38,8 @@
 - 🔍 反推：ffmpeg 抽帧 + Codex 逐帧观察，零 API 成本，证据优先防幻觉
 - 🧵 拼接：`concat` 命令流复制拼段（异常时 `--reencode`）
 - 🛡 成本安全：dry-run、防重复提交闸、failed 任务 NO-RETRY、拆段方案先确认总计费秒数
+- 📡 任务监控：提交后立即返回任务ID，Agent提示用户耐心等待并持续输出状态心跳，直到下载完成
+- 🧾 参考图审计：图生视频必须通过 `--require-image` 和 `[REFERENCE-AUDIT]`，缺图时在付费前拦截
 
 图片生成默认固定使用 `gpt-image-2`。只有用户明确要求4K才使用 `gpt-image-2-4k`；只有明确点名 Nano Banana/Gemini 时才转到 Gemini 图片插件。
 
@@ -119,7 +121,7 @@ node plugins/seedance-studio/scripts/studio.mjs account --json
 node plugins/seedance-studio/scripts/studio.mjs models --json
 node plugins/seedance-studio/scripts/studio.mjs --set-video-model "Seedance-2.5-720p官方版"
 node plugins/seedance-studio/scripts/studio.mjs video --prompt "雨夜东京街头，银色跑车驶过，霓虹倒影，电影级跟拍" --duration 10 --ratio 16:9
-node plugins/seedance-studio/scripts/studio.mjs video --prompt "..." --image product.jpg --duration 8 --dry-run
+node plugins/seedance-studio/scripts/studio.mjs video --prompt "..." --image product.jpg --require-image --duration 8 --dry-run
 node plugins/seedance-studio/scripts/studio.mjs video --prompt "..." --identity-image person.jpg --first-frame opening.png --duration 8 --dry-run
 node plugins/seedance-studio/scripts/studio.mjs status --task task_xxx --wait
 node plugins/seedance-studio/scripts/studio.mjs image --prompt "产品关键帧…" --aspect 16:9

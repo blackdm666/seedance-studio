@@ -70,6 +70,15 @@ function withIdentityLock(prompt, lock) {
   const s = String(prompt || "");
   return s.includes("【授权真人身份唯一基准】") ? s : lock + "\n\n" + s;
 }
+function promptRequiresImageReference(prompt) {
+  return /@图片|参考图|参考图片|基于.{0,12}(?:图片|图像)|以.{0,12}(?:图片|图像).{0,8}为准|保持.{0,20}(?:产品|人物|角色|主体).{0,12}一致/i.test(String(prompt || ""));
+}
+function monitorStartMessage(taskId) {
+  return "[monitor] Agent 正在监控视频任务 " + taskId + "；生成通常需要几分钟，请耐心等待，不要重复提交。";
+}
+function monitorHeartbeatMessage(status, progress, elapsedSeconds) {
+  return "[monitor] 任务仍在 " + status + "（progress=" + (progress == null ? "?" : progress) + "%）· 已等待 " + elapsedSeconds + " 秒；Agent 仍在监控，请继续耐心等待。";
+}
 const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 // 尺寸表与参考插件 88api-image-gen 的 SIZE_MATRIX 完全一致（后端最长边上限 IMAGE_MAX_EDGE=3840，4K 档不是把 2K 翻倍）
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
@@ -797,6 +806,10 @@ function buildVideoPayload(cfg, args, modelInfo) {
     if (!/^https?:\/\//.test(u)) die("视频/音频参考必须是公网 http(s) URL（本地文件不支持，需先上传对象存储）: " + u);
   }
   const hasImageAnchor = images.length || firstFrame || lastFrame;
+  const requireImage = Boolean(args["require-image"] || promptRequiresImageReference(prompt));
+  if (requireImage && !hasImageAnchor) {
+    die("参考图审计失败：本任务要求图片参考，但请求中没有 --image / --identity-image / --first-frame / --last-frame。未提交付费任务。");
+  }
   // 实测硬约束（88api 后端）：带视频/音频参考时必须至少配 1 张图片参考（首帧/尾帧也算），
   // 否则上游直接 400: "video/audio reference requires at least one image reference"。
   // 这里前置拦截，省掉一次无谓的失败提交。
@@ -845,6 +858,21 @@ function buildVideoPayload(cfg, args, modelInfo) {
   }
   return payload;
 }
+function buildReferenceAudit(args, payload) {
+  const imageInputs = asArray(args.image).map(String);
+  const identityInputs = asArray(args["identity-image"]).map(String);
+  const contentImages = Array.isArray(payload.content) ? payload.content.filter((item) => item && item.type === "image_url").length : 0;
+  return {
+    imageRequired: Boolean(args["require-image"] || promptRequiresImageReference(payload.prompt)),
+    imageCount: Array.isArray(payload.images) ? payload.images.length : contentImages,
+    identityImageCount: identityInputs.length,
+    firstFrame: Boolean(args["first-frame"]),
+    lastFrame: Boolean(args["last-frame"]),
+    videoReferenceCount: asArray(args["video-url"]).length,
+    audioReferenceCount: asArray(args["audio-url"]).length,
+    inputSources: [...identityInputs, ...imageInputs].map((source) => /^https?:\/\//.test(source) ? source : resolve(source)),
+  };
+}
 function sanitizePayload(p) {
   const clone = JSON.parse(JSON.stringify(p));
   if (clone.images) clone.images = clone.images.map(u => u.startsWith("data:") ? "data:<base64 " + (u.length/1366).toFixed(0) + "KB omitted>" : u);
@@ -858,17 +886,29 @@ function sanitizePayload(p) {
 async function pollTask(cfg, taskId, dir, adapter = DEFAULT_VIDEO_ADAPTER) {
   const started = Date.now();
   let lastStatus = "";
+  let lastHeartbeat = 0;
+  log(monitorStartMessage(taskId));
   while (true) {
     if (Date.now() - started > cfg.pollTimeoutMs) die("轮询超时（" + (cfg.pollTimeoutMs / 60000) + " 分钟）。任务可能仍在进行，稍后续查:\n  node studio.mjs status --task " + taskId + ' --wait --out "' + dir + '"');
     const st = await api(cfg, "GET", statusEndpointFor(adapter, taskId));
     const line = st.status + " progress=" + (st.progress == null ? "?" : st.progress) + "%";
-    if (line !== lastStatus) { log("[poll] " + line); lastStatus = line; }
+    const now = Date.now();
+    const elapsedSeconds = Math.round((now - started) / 1000);
+    if (line !== lastStatus) {
+      log("[poll] " + line + " · 已等待 " + elapsedSeconds + " 秒");
+      lastStatus = line;
+      lastHeartbeat = now;
+    } else if (now - lastHeartbeat >= 24000) {
+      log(monitorHeartbeatMessage(st.status, st.progress, elapsedSeconds));
+      lastHeartbeat = now;
+    }
     if (st.status === "completed") {
       if (!st.video_url) die("任务完成但未返回 video_url，原始响应: " + JSON.stringify(st).slice(0, 400));
       const dest = join(dir, "video_" + taskId.slice(-8) + ".mp4");
       log("[download] " + st.video_url.slice(0, 80) + "...");
       await download(st.video_url, dest);
       writeFileSync(join(dir, "result.json"), JSON.stringify(st, null, 2));
+      log("[monitor] 任务已完成，正在交付下载结果。");
       log("[DONE] 视频已保存: " + dest);
       if (st.usage) log("[usage] " + JSON.stringify(st.usage));
       return dest;
@@ -881,6 +921,7 @@ async function cmdVideo(cfg, args) {
   const [{ model, catalog }, account] = await Promise.all([selectedVideoModel(cfg, args), fetchAccount(cfg)]);
   if (Number(account.status) !== 1) die("88API 账户当前不是正常状态（status=" + account.status + "），未提交付费任务。");
   const payload = buildVideoPayload(cfg, args, model);
+  const referenceAudit = buildReferenceAudit(args, payload);
   const adapter = model.adapter || DEFAULT_VIDEO_ADAPTER;
   const createEndpoint = adapter.createEndpoint || DEFAULT_VIDEO_ADAPTER.createEndpoint;
   const dir = outDir(args);
@@ -897,6 +938,7 @@ async function cmdVideo(cfg, args) {
     log("[DRY-RUN] 不会调用付费接口。将提交:");
     log("POST " + cfg.baseUrl + createEndpoint);
     log("[IDENTITY-AUDIT] " + JSON.stringify(identityAudit));
+    log("[REFERENCE-AUDIT] " + JSON.stringify(referenceAudit));
     log(JSON.stringify(sanitizePayload(payload), null, 2));
     log("[模型] " + model.id + " · " + modelSummary(model));
     log("[价格] " + priceLabel(model.price) + " · 目录版本 " + catalog.pricingVersion);
@@ -917,11 +959,12 @@ async function cmdVideo(cfg, args) {
   const audioMode = payload.generate_audio == null ? "model-default" : String(payload.generate_audio);
   const geometry = payload.size || payload.ratio || payload.resolution || "model-default";
   log("[submit] POST " + createEndpoint + " · " + model.id + " (" + payload.duration + "s, " + geometry + ", audio=" + audioMode + frameNote + identityNote + ")");
+  log("[reference] images=" + referenceAudit.imageCount + " · identity=" + referenceAudit.identityImageCount + " · video=" + referenceAudit.videoReferenceCount + " · audio=" + referenceAudit.audioReferenceCount);
   log("[price] " + priceLabel(model.price) + (estimatedCost != null ? " · 本次估算 " + money(estimatedCost, model.price.currency) : "") + " · 当前余额 " + money(account.balance, account.currency));
   const task = await api(cfg, "POST", createEndpoint, payload);
   const taskId = task.id || task.task_id;
   if (!taskId) die("提交响应中无任务 ID: " + JSON.stringify(task).slice(0, 400));
-  writeFileSync(runFile, JSON.stringify({ taskId, submittedAt: new Date().toISOString(), catalogAudit, estimatedCost, identityAudit, payload: sanitizePayload(payload) }, null, 2));
+  writeFileSync(runFile, JSON.stringify({ taskId, submittedAt: new Date().toISOString(), catalogAudit, estimatedCost, identityAudit, referenceAudit, payload: sanitizePayload(payload) }, null, 2));
   log("[task] " + taskId + " (status=" + task.status + ")");
   if (args["no-wait"]) { log("稍后查询: node studio.mjs status --task " + taskId + ' --wait --out "' + dir + '"'); return; }
   await pollTask(cfg, taskId, dir, adapter);
@@ -1512,7 +1555,7 @@ async function main(argv = process.argv.slice(2)) {
     '  生视频: node studio.mjs video --prompt "..." [--model 临时覆盖模型ID] [--duration 秒] [--ratio 16:9]',
     "          [--first-frame 图] [--last-frame 图]（图生视频：片头随首帧/片尾随尾帧）",
     "          [--identity-image 授权真人图] [--image 场景/产品图 ...合计最多30] [--video-url URL] [--audio-url URL]",
-    "          [--audio|--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
+    "          [--require-image] [--audio|--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
     '  生图:  node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model gpt-image-2-4k] [--identity-ref 授权真人图] [--ref 场景/产品图 ...] [--dry-run]',
     "          多张并发：重复 --prompt 出多张不同图，或 --n 每个提示词出几张；总量 = 提示词数 × n，用并发池并行跑（默认并发 3、上限 10）",
@@ -1527,4 +1570,4 @@ async function main(argv = process.argv.slice(2)) {
 const invokedAsScript = process.argv[1] && resolve(process.argv[1]).toLowerCase() === resolve(SCRIPT_PATH).toLowerCase();
 if (invokedAsScript) main().catch(e => { console.error("[ERROR] " + (e && e.message ? e.message : String(e))); process.exitCode = 1; });
 
-export { ONBOARDING_LINES, VIDEO_MODEL_ADAPTERS, explicitVideoAdapter, inferVideoCapabilities, normalizeVideoPrice, isVideoCatalogRow, endpointCompatible, buildVideoPayload, fetchVideoCatalog, fetchAccount, money, priceLabel };
+export { ONBOARDING_LINES, VIDEO_MODEL_ADAPTERS, explicitVideoAdapter, inferVideoCapabilities, normalizeVideoPrice, isVideoCatalogRow, endpointCompatible, promptRequiresImageReference, buildVideoPayload, buildReferenceAudit, monitorStartMessage, monitorHeartbeatMessage, fetchVideoCatalog, fetchAccount, runPreflight, money, priceLabel };

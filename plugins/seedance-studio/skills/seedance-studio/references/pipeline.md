@@ -44,10 +44,11 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" image --prompt "<角色/产品/场景的
 每段独立目录、提示词存档：
 
 ```powershell
-node "<PLUGIN_ROOT>/scripts/studio.mjs" video --prompt "<segNN 提示词>" --duration <秒> --ratio <比例> --image "<project>/assets/girl.png" --out "<project>/segments/seg01"
+node "<PLUGIN_ROOT>/scripts/studio.mjs" video --prompt "<segNN 提示词>" --duration <秒> --ratio <比例> --image "<project>/assets/girl.png" --require-image --out "<project>/segments/seg01" --no-wait
 ```
 
 - 提示词写入 `prompts/segNN.txt` 后再提交；段内四层结构照常，**全局锁定层各段逐字复用**（同一身份、服装、场景与声音策略描述），并声明每张 `@图片` 的职责。
+- 付费提交前先 `--dry-run`，核对 `[REFERENCE-AUDIT].imageCount >= 1`；提交返回任务ID后向用户说明正在监控，再用 `status --task <ID> --wait --out <段目录>` 持续监控。
 - 段首写明起始状态（承接上段尾帧），段尾写明可见结束状态。
 - 顺序生成（同一锚定体系下并发意义不大且难审）；每段完成后快速抽 1 帧目检衔接状态。
 - 失败段：按 troubleshooting.md 诊断，修复后在**新子目录**重交（`segments/seg03-r2/`），成功段绝不重跑。

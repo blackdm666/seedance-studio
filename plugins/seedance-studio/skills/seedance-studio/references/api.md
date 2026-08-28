@@ -152,8 +152,13 @@ API Key读取优先级：`SEEDANCE_STUDIO_API_KEY` → `~/.seedance-studio/confi
 `queued → in_progress → completed | failed`。完成后从 `video_url` 下载（**有有效期，立即下载**），`usage.seconds` 为计费秒数。
 
 - 轮询间隔 10–15 秒；客户端总超时 ≥20 分钟
+- Agent交互先用 `video --no-wait` 获取任务ID，立即告诉用户“任务已提交，正在监控，请耐心等待”，再调用 `status --wait`。状态未变化时CLI每约24秒输出一次监控心跳，不能让用户误以为卡死。
 - queued/in_progress 期间**不要重复提交**——会创建多个计费任务
 - 只有确认 POST 未到达服务器时才允许重试提交
+
+### 参考图提交审计
+
+用户提供或刚生成了产品图、关键帧、锚定图时，视频命令必须同时传 `--image <绝对路径> --require-image`。付费前先 `--dry-run`，确认 `[REFERENCE-AUDIT].imageCount >= 1`。若提示词包含 `@图片`、“参考图”或“保持产品/人物一致”，但请求里没有图片，CLI会在提交前报错，不产生费用。`run.json`会保存 `referenceAudit`，便于事后确认实际提交数量和来源。
 
 ## 常见错误对照
 

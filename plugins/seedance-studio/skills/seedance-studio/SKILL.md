@@ -106,18 +106,24 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" image --prompt "<产品图提示词>" --
 3. **写提示词。** 按 prompting.md 四层结构（参考声明 → 一句话总览 → 可见推进/时间戳分镜 → 全局锁定）。
 4. **展示计划（付费闸）。** 展示模型 ID、能力匹配、实时单价、价格版本、时长与总估算金额。即使用户说“直接出”，首次模型选择也不能跳过；模型已经由用户选择后可跳过重复确认。
 5. **关键帧预审（可选，便宜）。** 仅当所选视频模型支持图片参考/图生视频时使用。场景复杂、拿不准或涉及产品外观时先 `image` 生成 1 张关键帧确认方向。片中有贯穿全片的主角/产品时，身份或产品锚定不是可选：复刻原片演员走新身份锚定；用户明确提供替换人物则走上方授权真人分支。生图默认 `gpt-image-2`；海报级高清才显式使用 `gpt-image-2-4k`。
-6. **提交生成。**
+6. **参考图提交审计。** 用户提供了图片、刚生成了产品图/关键帧/锚定图，或提示词含 `@图片` / “参考图”时：
+   - 把实际图片绝对路径逐个传给 `--image`；授权真人原图用 `--identity-image`；
+   - 必须加 `--require-image`，先 `--dry-run`；
+   - 只有 `[REFERENCE-AUDIT]` 显示 `imageCount >= 1` 才允许付费提交；否则停止修正，绝不静默丢图出片。
+7. **提交后先返回任务。** Agent交互中一律给 `video` 加 `--no-wait`，拿到任务ID后立刻告诉用户：`视频任务已提交，生成通常需要几分钟。我正在持续监控任务进度，请耐心等待，不要重复提交。`
 
 ```powershell
-node "<PLUGIN_ROOT>/scripts/studio.mjs" video --prompt "<提示词>" --duration 10 --ratio 9:16 --out "<project>/segments/seg01"
+node "<PLUGIN_ROOT>/scripts/studio.mjs" video --prompt "<提示词>" --duration 10 --ratio 9:16 --out "<project>/segments/seg01" --no-wait
+node "<PLUGIN_ROOT>/scripts/studio.mjs" status --task <任务ID> --wait --out "<project>/segments/seg01"
 ```
 
-图生视频仅在所选模型支持时加 `--image <本地图>`；图片数量上限从实时目录读取。脚本自动轮询下载 MP4。**参考图本身含文字、标注、编号或 Logo 时，必须在提示词中声明“只参考造型/氛围，画面中禁止出现任何文字、数字、标注和 Logo”。**
+图生视频仅在所选模型支持时加 `--image <本地图> --require-image`；图片数量上限从实时目录读取。脚本自动轮询下载 MP4。**参考图本身含文字、标注、编号或 Logo 时，必须在提示词中声明“只参考造型/氛围，画面中禁止出现任何文字、数字、标注和 Logo”。**
 
 授权真人出片使用 `--identity-image <原照片>`；场景/产品/风格图仍用 `--image`。CLI 会把身份图放在普通参考图第一位、自动注入身份唯一基准，并在 dry-run 与 `run.json` 写入身份审计。
 
 > **参考素材能力按模型目录执行。** 只有目录声明支持时才可用 `--video-url` 迁移运镜、`--audio-url` 卡节奏、`--first-frame` / `--last-frame` 控制首尾帧。视频/音频必须公网 URL；数量上限从实时能力说明读取。提示词需逐条声明每个素材只负责哪一维，见 [references/references.md](references/references.md)。
-7. **交付。** 报告实际模型、价格版本、估算与实际用量、成片路径。失败时读 troubleshooting.md 诊断，**修完原因才允许重交**。
+8. **持续监控。** `status --wait` 会定期输出进度心跳；即使状态未变化，也要让用户看到“Agent仍在监控”。持续等待到 completed/failed，不得把长时间无变化误报为卡死，也不得重复提交。
+9. **交付。** 报告实际模型、价格版本、参考图审计、估算与实际用量、成片路径。失败时读 troubleshooting.md 诊断，**修完原因才允许重交**。
 
 超过所选模型单段上限或多场景需求：切换到 [references/pipeline.md](references/pipeline.md) 的完整管线（规划 → 锚定图 → 分段生成 → `concat` 拼接）。
 

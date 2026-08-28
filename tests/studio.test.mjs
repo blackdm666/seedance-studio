@@ -15,7 +15,11 @@ import {
   normalizeVideoPrice,
   isVideoCatalogRow,
   endpointCompatible,
+  promptRequiresImageReference,
   buildVideoPayload,
+  buildReferenceAudit,
+  monitorStartMessage,
+  monitorHeartbeatMessage,
   fetchVideoCatalog,
   fetchAccount,
   priceLabel,
@@ -234,6 +238,41 @@ test("builds a payload from the user-selected model profile", () => {
   assert.equal(payload.model, model.id);
   assert.equal(payload.duration, 5);
   assert.equal(payload.resolution, "1080p");
+});
+
+test("blocks paid video submission when a required reference image is missing", (t) => {
+  const model = {
+    id: "video-with-images",
+    capabilities: { minDuration: 4, maxDuration: 10, defaultDuration: 5, imageReference: true },
+  };
+  assert.throws(
+    () => buildVideoPayload({}, { prompt: "product video", "require-image": true }, model),
+    /参考图审计失败/,
+  );
+  assert.equal(promptRequiresImageReference("请严格参考图保持产品一致"), true);
+  assert.throws(
+    () => buildVideoPayload({}, { prompt: "请严格参考图保持产品一致" }, model),
+    /参考图审计失败/,
+  );
+  const audit = buildReferenceAudit(
+    { image: ["product.png"], "require-image": true },
+    { prompt: "product video", images: ["data:image/png;base64,abc"] },
+  );
+  assert.equal(audit.imageRequired, true);
+  assert.equal(audit.imageCount, 1);
+
+  const temp = mkdtempSync(join(tmpdir(), "seedance-reference-audit-"));
+  t.after(() => rmSync(temp, { recursive: true, force: true }));
+  const imagePath = join(temp, "product.png");
+  writeFileSync(imagePath, Buffer.from("89504E470D0A1A0A0000000D49484452", "hex"));
+  const payload = buildVideoPayload({}, { prompt: "product video", image: imagePath, "require-image": true }, model);
+  assert.equal(payload.images.length, 1);
+  assert.match(payload.images[0], /^data:image\/png;base64,/);
+});
+
+test("monitor messages tell the user that the Agent is still watching progress", () => {
+  assert.match(monitorStartMessage("task_demo"), /正在监控.*请耐心等待.*不要重复提交/);
+  assert.match(monitorHeartbeatMessage("in_progress", 35, 48), /Agent 仍在监控.*继续耐心等待/);
 });
 
 test("blocks reference images only when the catalog explicitly denies them", () => {

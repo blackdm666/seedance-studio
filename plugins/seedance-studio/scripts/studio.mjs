@@ -20,6 +20,7 @@ const DEFAULTS = {
   imageModel: "gpt-image-2",
   accessToken: "",
   userId: "",
+  onboardingShown: false,
   pollIntervalMs: 12000,
   pollTimeoutMs: 25 * 60 * 1000,
 };
@@ -112,6 +113,14 @@ const CAPS = [
   "  • 错误分类分流：确定性错误(401/审核/模型名/400)立即停并诊断；上游熔断/容量/瞬时抖动(fetch failed/timeout/502/504)同模型快速重试 1 次，再不行报错交用户决定。",
   "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——走 /v1/images/edits；功能三保产品/人物一致性首选",
 ];
+const ONBOARDING_LINES = [
+  "欢迎使用 88API-Seedance-Studio。它主要有三种用法：",
+  "  1. 想法 → 成片：描述短片/TVC，插件整理需求、选择实时视频模型、生成并下载成片。",
+  "  2. 视频 → 反推：分析参考视频的画面、运镜、动作、台词、BGM 与音效，产出可生成提示词。",
+  "  3. 视频 → 复刻工程包：在反推基础上整理分镜、素材职责和缺失素材，换成你的产品或授权人物。",
+  "常用说法：`做一条 10 秒竖屏运动鞋广告`、`反推这个视频`、`把这个参考片做成可复刻工程包`。",
+  "首次付费生成前需要配置 88API API Key 与个人访问令牌，并从实时模型列表中由你明确选择视频模型。两项凭据都可在可信聊天中直接交给 Agent 一键配置；个人访问令牌也保留本机隐藏输入方式。",
+];
 
 function readStoredConfig() {
   if (!existsSync(CONFIG_PATH)) return {};
@@ -137,14 +146,13 @@ function loadConfig() {
     ...DEFAULTS,
     ...stored,
     apiKey: firstEnv(ENV.apiKey) || stored.apiKey || "",
-    accessToken: firstEnv(ENV.accessToken),
-    userId: firstEnv(ENV.userId) || stored.userId || "",
+    accessToken: stored.accessToken || firstEnv(ENV.accessToken) || "",
+    userId: stored.userId || firstEnv(ENV.userId) || "",
   };
 }
 function saveConfigPatch(patch) {
   mkdirSync(CONFIG_DIR, { recursive: true });
   const stored = readStoredConfig();
-  delete stored.accessToken;
   writeFileSync(CONFIG_PATH, JSON.stringify({ ...stored, ...patch }, null, 2), { encoding: "utf8", mode: 0o600 });
   try { chmodSync(CONFIG_PATH, 0o600); } catch { /* Windows may not expose POSIX mode bits. */ }
 }
@@ -503,6 +511,17 @@ async function cmdSetVideoModel(cfg, modelId) {
   log("能力: " + modelSummary(model));
   return model;
 }
+async function cmdSetAccessToken(cfg, token) {
+  const candidate = String(token || "").trim();
+  if (!candidate) die("个人访问令牌不能为空");
+  const probe = { ...cfg, accessToken: candidate, userId: "" };
+  let account;
+  try { account = await fetchAccount(probe); }
+  catch (error) { die("个人访问令牌验证失败，未保存: " + error.message); }
+  saveConfigPatch({ accessToken: candidate, userId: String(account.id || ""), accessTokenConfiguredAt: new Date().toISOString() });
+  log("个人访问令牌已验证并保存到 " + CONFIG_PATH + "（" + mask(candidate) + "）");
+  log("已自动识别用户 ID；不会在回复或日志中显示完整令牌。验证完成，继续原任务即可。");
+}
 function cmdConfigureAccessToken() {
   if (process.platform !== "win32") {
     die("安全配置助手当前仅支持 Windows。请在系统安全环境中设置 SEEDANCE_STUDIO_ACCESS_TOKEN；可选设置 SEEDANCE_STUDIO_USER_ID。不要把访问令牌放在命令行参数或普通配置文件中。");
@@ -511,7 +530,11 @@ function cmdConfigureAccessToken() {
   const result = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper], { stdio: "inherit" });
   if (result.error) die("无法启动访问令牌安全配置助手: " + result.error.message);
   if (result.status !== 0) die("访问令牌配置未完成。");
+  saveConfigPatch({ accessToken: null, userId: null, accessTokenConfiguredAt: null });
   log("配置已完成。后续命令会从 Windows 用户环境变量读取访问令牌；不会写入 " + CONFIG_PATH + "。");
+}
+function cmdIntro() {
+  for (const line of ONBOARDING_LINES) log(line);
 }
 async function selectedVideoModel(cfg, args) {
   const selectedId = String(args.model || cfg.videoModel || "").trim();
@@ -1232,15 +1255,17 @@ async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const cfg = loadConfig();
   if (args["set-key"]) { cfg.apiKey = String(args["set-key"]); saveConfigPatch({ apiKey: cfg.apiKey }); log("API Key 已保存到 " + CONFIG_PATH + "（" + mask(cfg.apiKey) + "）"); return; }
-  if (args["set-access-token"]) die("为避免个人访问令牌出现在命令行历史中，已禁用 --set-access-token <值>。请改用 --configure-access-token 的隐藏输入助手。");
+  if (args["set-access-token"]) return cmdSetAccessToken(cfg, args["set-access-token"]);
   if (args["configure-access-token"]) return cmdConfigureAccessToken();
+  if (args["mark-onboarding-shown"]) { saveConfigPatch({ onboardingShown: true, onboardingShownAt: new Date().toISOString() }); log("首次使用介绍已标记完成。"); return; }
   if (args["set-video-model"]) return cmdSetVideoModel(cfg, String(args["set-video-model"]));
   if (args["set-base-url"]) { cfg.baseUrl = String(args["set-base-url"]).replace(/\/$/, ""); saveConfigPatch({ baseUrl: cfg.baseUrl }); log("baseUrl = " + cfg.baseUrl); return; }
   if (args["config-path"]) { log(CONFIG_PATH); return; }
-  if (args["get-config"]) { log(JSON.stringify({ configPath: CONFIG_PATH, baseUrl: cfg.baseUrl, apiKey: mask(cfg.apiKey), accessToken: mask(cfg.accessToken), userId: cfg.userId || "(auto)", videoModel: cfg.videoModel || "(not selected)", imageModel: cfg.imageModel, audioModel: AUDIO_MODEL_DEFAULT }, null, 2)); return; }
+  if (args["get-config"]) { log(JSON.stringify({ configPath: CONFIG_PATH, baseUrl: cfg.baseUrl, apiKey: mask(cfg.apiKey), accessToken: mask(cfg.accessToken), userId: cfg.userId || "(auto)", videoModel: cfg.videoModel || "(not selected)", imageModel: cfg.imageModel, audioModel: AUDIO_MODEL_DEFAULT, onboardingShown: Boolean(cfg.onboardingShown) }, null, 2)); return; }
   if (args["caps"] || args["capabilities"]) return cmdCaps(cfg);
   if (args["self-test"]) return cmdSelfTest(cfg);
   const cmd = args._[0];
+  if (cmd === "intro") return cmdIntro();
   if (cmd === "account") return cmdAccount(cfg, args);
   if (cmd === "models") return cmdModels(cfg, args);
   if (cmd === "video") return cmdVideo(cfg, args);
@@ -1252,7 +1277,9 @@ async function main(argv = process.argv.slice(2)) {
   if (cmd === "audio") return cmdAudio(cfg, args);
   log(["seedance-studio CLI — 用法:",
     '  配置生成 Key: node studio.mjs --set-key "sk-..."',
-    '  安全配置访问令牌: node studio.mjs --configure-access-token（隐藏输入；不写配置文件）',
+    '  聊天配置访问令牌: node studio.mjs --set-access-token "<令牌>"（优先；自动验证并脱敏保存）',
+    '  隐藏输入访问令牌: node studio.mjs --configure-access-token（备用；不写配置文件）',
+    '  首次介绍: node studio.mjs intro | --mark-onboarding-shown',
     '  查账户: node studio.mjs account [--json]',
     '  查视频模型: node studio.mjs models [--json] [--no-key-check]',
     '  选择模型: node studio.mjs --set-video-model "<模型ID>"',
@@ -1275,4 +1302,4 @@ async function main(argv = process.argv.slice(2)) {
 const invokedAsScript = process.argv[1] && resolve(process.argv[1]).toLowerCase() === resolve(SCRIPT_PATH).toLowerCase();
 if (invokedAsScript) main().catch(e => { console.error("[ERROR] " + (e && e.message ? e.message : String(e))); process.exitCode = 1; });
 
-export { inferVideoCapabilities, normalizeVideoPrice, isVideoCatalogRow, endpointCompatible, buildVideoPayload, fetchVideoCatalog, fetchAccount, money, priceLabel };
+export { ONBOARDING_LINES, inferVideoCapabilities, normalizeVideoPrice, isVideoCatalogRow, endpointCompatible, buildVideoPayload, fetchVideoCatalog, fetchAccount, money, priceLabel };

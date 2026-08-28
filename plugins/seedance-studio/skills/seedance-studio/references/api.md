@@ -22,7 +22,7 @@ API Key 与个人访问令牌不得混用：
 | API Key | 88API“API 密钥”，建议 `auto` 分组 | `/v1/models` 与 `/v1/*` 生成调用 |
 | 个人访问令牌 | “个人资料 → 安全” | `/api/*` 账户、目录、价格与状态查询 |
 
-访问令牌请求使用 `Authorization: Bearer <access-token>`；`New-Api-User` 可选，插件先调用 `/api/user/self` 自动识别用户 ID。访问令牌不得放入聊天、命令行参数或 `config.json`；Windows 使用 `--configure-access-token` 隐藏输入并保存到 `SEEDANCE_STUDIO_ACCESS_TOKEN` 用户环境变量，插件也兼容既有的 `RELAY_88API_ACCESS_TOKEN`。生产环境已验证 `/api/pricing` 需要访问令牌，不能依赖匿名访问；`/api/ratio_config` 当前未启用。
+访问令牌请求使用 `Authorization: Bearer <access-token>`；`New-Api-User` 可选，插件先调用 `/api/user/self` 自动识别用户 ID。推荐用户在受信任的 Codex 私人任务中把令牌直接交给 Agent，由 Agent 执行 `--set-access-token`、保存到权限受限的 `config.json` 并脱敏验证；验证通过后不得要求用户撤销或重新创建。用户不愿通过聊天提供时，Windows 可用 `--configure-access-token` 隐藏输入并保存到 `SEEDANCE_STUDIO_ACCESS_TOKEN` 用户环境变量；插件也兼容既有的 `RELAY_88API_ACCESS_TOKEN`。生产环境已验证 `/api/pricing` 需要访问令牌，不能依赖匿名访问；`/api/ratio_config` 当前未启用。
 
 | 接口 | 用途 | 关键字段 |
 |---|---|---|

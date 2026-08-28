@@ -2,7 +2,7 @@
 
 一句话出片的 Codex 集合插件：实时读取 [88api.ai](https://88api.ai/) 当前视频模型、价格、能力与可用状态，由用户选择模型后生成单条短片或 TVC/广告片。
 
-首次使用配置两个彼此独立的凭据：生成用 **API Key**，账户/价格查询用**个人访问令牌**。访问令牌通过隐藏输入写入专用用户环境变量，不进入命令行历史或插件配置文件。插件不会替用户擅自决定视频模型。
+首次使用配置两个彼此独立的凭据：生成用 **API Key**，账户/价格查询用**个人访问令牌**。两项凭据都可以在受信任的 Codex 私人任务中直接交给 Agent 一键配置；个人访问令牌同时保留本机隐藏输入方式。插件不会替用户擅自决定视频模型。
 
 ## 三大工作流
 
@@ -11,6 +11,18 @@
 | **① 想法 → 成片** | 一句话想法 | 获取实时视频模型、价格和能力 → 用户选模型 → 按该模型单段上限自动分级 → 必要时拆段并 `concat` | 单条短片 / TVC 的 MP4 |
 | **② 视频 → 反推** | 一条参考视频 | ffmpeg 抽帧 → 逐帧证据观察 → 结构化还原运镜/动作/文字/声音 | 可直接生成的提示词 |
 | **③ 视频 → 复刻工程包** | 一条参考视频 | ②的全部 + 素材盘点 + 人物身份路由（原片演员新身份 / 授权替换人物原图直传）+ 逐段绑定提示词 | 补齐素材即可一键生成的完整工程 |
+
+## 首次调用体验
+
+插件首次被调用时会主动介绍上述三种用法，并给出可直接照着说的例子：
+
+```text
+做一条 10 秒竖屏运动鞋广告。
+反推这个视频的提示词。
+把这个参考片做成可复刻工程包，我要换成自己的产品。
+```
+
+介绍只显示一次，随后自动继续用户刚才的任务，不要求重新描述。
 
 > 首次出片会展示所有当前视频模型的模型 ID、实时单价、能力摘要和三层可用状态（目录、账户、当前 API Key），等待用户明确选择。多镜片还会确认拆段、价格版本和总估算金额。**本插件专注单条短片与 TVC，不做多集连续短剧/剧集/电影。**
 
@@ -58,9 +70,9 @@
 
 ### 5. 让 Agent 一键配置（推荐）
 
-安装插件后直接向 **88API-Seedance-Studio** 描述视频需求。Agent 会检查两项凭据：API Key 可交给受信任的 Agent 一键配置；个人访问令牌由 Agent 启动隐藏输入助手，你在本机交互窗口中输入，令牌不会进入聊天或命令参数。验证后插件会查询余额并显示实时模型列表；你选择模型后，它继续原任务。
+安装插件后直接向 **88API-Seedance-Studio** 描述视频需求。Agent 会先介绍插件用法并检查两项凭据。**推荐把 API Key 和个人访问令牌直接交给当前受信任任务中的 Agent**，它会自动保存、脱敏验证、查询余额并显示实时模型列表；验证通过后不会要求撤销或重新创建凭据。你不愿在聊天中发送个人访问令牌时，再改用隐藏输入助手。
 
-API Key 与模型选择保存在本机 `~/.seedance-studio/config.json`；个人访问令牌保存到 `SEEDANCE_STUDIO_ACCESS_TOKEN` Windows 用户环境变量，用户 ID 自动保存到 `SEEDANCE_STUDIO_USER_ID`。Agent 不会在回复中显示完整凭据；账户、目录和自检不会发起付费生成。
+聊天配置的 API Key、个人访问令牌与模型选择保存在本机权限受限的 `~/.seedance-studio/config.json`；隐藏输入方式则把访问令牌保存到 `SEEDANCE_STUDIO_ACCESS_TOKEN` Windows 用户环境变量。Agent 不会在回复中显示完整凭据；账户、目录和自检不会发起付费生成。
 
 > 仅在自己信任的 Codex 任务中提供凭据，不要把 API Key 或个人访问令牌发布到 GitHub Issue、公开聊天、仓库文件或截图中。
 
@@ -69,7 +81,9 @@ API Key 与模型选择保存在本机 `~/.seedance-studio/config.json`；个人
 
 ```powershell
 node plugins/seedance-studio/scripts/studio.mjs --set-key "<YOUR_88API_KEY>"
+node plugins/seedance-studio/scripts/studio.mjs --set-access-token "<YOUR_88API_ACCESS_TOKEN>"
 node plugins/seedance-studio/scripts/studio.mjs --configure-access-token
+node plugins/seedance-studio/scripts/studio.mjs intro
 node plugins/seedance-studio/scripts/studio.mjs account
 node plugins/seedance-studio/scripts/studio.mjs models
 node plugins/seedance-studio/scripts/studio.mjs --set-video-model "<EXACT_MODEL_ID>"

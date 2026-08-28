@@ -1,6 +1,6 @@
 {
   "name": "seedance-studio",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "88API 动态视频短片工作室：实时查询账户余额、视频模型价格、能力和可用状态，由用户选择模型后生成短片/TVC，并支持视频反推与复刻工程包。",
   "homepage": "https://88api.ai/",
   "author": {
@@ -13,13 +13,13 @@
     "displayName": "88API-Seedance-Studio",
     "developerName": "88API",
     "shortDescription": "实时查询 88API 视频模型、价格、能力与可用状态，让用户选模型后生成短片/TVC。",
-    "longDescription": "通过 88API 双凭据分别完成付费生成与只读账户查询：自动获取余额、实时视频模型目录、价格版本、能力说明、端点兼容性、账户可见性和当前 API Key 可用状态，由用户明确选择模型后再生成。按所选模型的单段时长、分辨率、画幅与参考素材能力自动校验，支持单段直出、多镜拆段拼接、gpt-image 关键帧、授权人物身份直传、视频提示词反推与可复刻工程包；音频反推默认使用 gemini-3.7-flash。专注单条短片与广告片，不做多集连续剧。",
+    "longDescription": "首次调用会主动介绍想法出片、视频反推和复刻工程包三种主要用法。通过 88API 双凭据分别完成付费生成与只读账户查询：两项凭据都可优先在受信任聊天中交给 Agent 一键配置，个人访问令牌同时保留隐藏输入方式。插件自动获取余额、实时视频模型目录、价格版本、能力说明、端点兼容性、账户可见性和当前 API Key 可用状态，由用户明确选择模型后再生成。支持单段直出、多镜拼接、gpt-image 关键帧、授权人物身份直传、视频提示词反推与可复刻工程包；音频反推默认使用 gemini-3.7-flash。",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
     "websiteURL": "https://88api.ai/",
     "brandColor": "#55A6A5",
     "composerIcon": "./assets/composer-icon.png",
     "logo": "./assets/plugin-logo.png",
-    "defaultPrompt": "使用 $seedance-studio：先检查 88API API Key 与个人访问令牌；缺访问令牌时启动隐藏输入助手。显示余额和当前视频模型价格、能力、状态，让我选择后再出片。"
+    "defaultPrompt": "使用 $seedance-studio：首次调用先主动介绍主要用法。检查两项 88API 凭据，优先让我在聊天中交给你一键配置，隐藏输入作为备用；显示余额和模型价格、能力、状态，让我选择后再出片。"
   }
 }

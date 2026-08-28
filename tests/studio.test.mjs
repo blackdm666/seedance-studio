@@ -2,8 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
+  ONBOARDING_LINES,
   inferVideoCapabilities,
   normalizeVideoPrice,
   isVideoCatalogRow,
@@ -13,6 +19,59 @@ import {
   fetchAccount,
   priceLabel,
 } from "../plugins/seedance-studio/scripts/studio.mjs";
+
+test("first-use introduction covers all main workflows and chat-first credential setup", () => {
+  const intro = ONBOARDING_LINES.join("\n");
+  assert.match(intro, /想法 → 成片/);
+  assert.match(intro, /视频 → 反推/);
+  assert.match(intro, /视频 → 复刻工程包/);
+  assert.match(intro, /可信聊天中直接交给 Agent/);
+  assert.match(intro, /隐藏输入方式/);
+});
+
+test("chat-provided access token is verified, saved, masked and does not trigger revocation advice", async (t) => {
+  const server = createServer((req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/api/user/self") {
+      res.end(JSON.stringify({ success: true, data: { id: 7, username: "demo", group: "default", status: 1, quota: 500000, used_quota: 0, request_count: 0 } }));
+      return;
+    }
+    if (req.url === "/api/status") {
+      res.end(JSON.stringify({ success: true, data: { quota_per_unit: 500000, quota_display_type: "CNY" } }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ success: false, message: "not found" }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.close());
+
+  const home = mkdtempSync(join(tmpdir(), "seedance-chat-token-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const configDir = join(home, ".seedance-studio");
+  mkdirSync(configDir, { recursive: true });
+  const { port } = server.address();
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({ baseUrl: `http://127.0.0.1:${port}` }));
+  const cliPath = fileURLToPath(new URL("../plugins/seedance-studio/scripts/studio.mjs", import.meta.url));
+  const env = { ...process.env, USERPROFILE: home, HOME: home };
+  delete env.SEEDANCE_STUDIO_ACCESS_TOKEN;
+  delete env.RELAY_88API_ACCESS_TOKEN;
+  delete env.SEEDANCE_STUDIO_USER_ID;
+  delete env.RELAY_88API_USER_ID;
+  const token = "chat-token-value";
+  const child = spawn(process.execPath, [cliPath, "--set-access-token", token], { env, windowsHide: true });
+  let stdout = "", stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const [code] = await once(child, "close");
+  assert.equal(code, 0, stderr);
+  assert.doesNotMatch(stdout, new RegExp(token));
+  assert.doesNotMatch(stdout, /立即撤销|重新创建/);
+  const saved = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  assert.equal(saved.accessToken, token);
+  assert.equal(saved.userId, "7");
+});
 
 test("parses Seedance catalog capabilities and limits", () => {
   const capabilities = inferVideoCapabilities({

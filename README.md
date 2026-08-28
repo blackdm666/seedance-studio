@@ -1,24 +1,26 @@
 # 88API-Seedance-Studio
 
-一句话出片的 Codex 集合插件：基于 [88api.ai](https://88api.ai/) 的 **Seedance 2.5 满血版**，专注**单条短片与 TVC/广告片**。
+一句话出片的 Codex 集合插件：实时读取 [88api.ai](https://88api.ai/) 当前视频模型、价格、能力与可用状态，由用户选择模型后生成单条短片或 TVC/广告片。
 
-**你只需要做两件事：装插件、填 Key。** 之后一句话说想法，剩下的全部由 Codex 自动完成。
+首次使用配置两个彼此独立的凭据：生成用 **API Key**，账户/价格查询用**个人访问令牌**。访问令牌通过隐藏输入写入专用用户环境变量，不进入命令行历史或插件配置文件。插件不会替用户擅自决定视频模型。
 
 ## 三大工作流
 
 | 工作流 | 输入 | Codex 自动完成 | 产出 |
 |---|---|---|---|
-| **① 想法 → 成片** | 一句话想法 | **自动按规模分级**：T0 单镜直接出（含 15–30 秒 TVC）· T1 多镜短片拆段生成 + `concat` 拼接成一条连续成片 | 单条短片 / TVC 的 MP4 |
+| **① 想法 → 成片** | 一句话想法 | 获取实时视频模型、价格和能力 → 用户选模型 → 按该模型单段上限自动分级 → 必要时拆段并 `concat` | 单条短片 / TVC 的 MP4 |
 | **② 视频 → 反推** | 一条参考视频 | ffmpeg 抽帧 → 逐帧证据观察 → 结构化还原运镜/动作/文字/声音 | 可直接生成的提示词 |
 | **③ 视频 → 复刻工程包** | 一条参考视频 | ②的全部 + 素材盘点 + 人物身份路由（原片演员新身份 / 授权替换人物原图直传）+ 逐段绑定提示词 | 补齐素材即可一键生成的完整工程 |
 
-> **① 自动分级：T0 一句话直接出，T1 多镜短片只在开拍前跟你确认一次拆段与总计费秒数**——既保住"一句话出片"，又不让你在不知情下烧掉一条长片的钱。**本插件专注单条短片与 TVC，不做多集连续短剧/剧集/电影**：跨集一致性靠喂图会漂、角色配音锁不住、且持续烧钱成本高；遇到连续剧需求，它会帮你先做一条自成一体的样片/预告/TVC，成系列请换专门的制片工具链。
+> 首次出片会展示所有当前视频模型的模型 ID、实时单价、能力摘要和三层可用状态（目录、账户、当前 API Key），等待用户明确选择。多镜片还会确认拆段、价格版本和总估算金额。**本插件专注单条短片与 TVC，不做多集连续短剧/剧集/电影。**
 
 > 功能③是对"光有提示词还不够"的回答：好视频 = 提示词 × 素材绑定 × 时间结构。工程包内含素材职责表与**缺失素材清单**（原片每种产品形态各需一张干净图），补齐后直接进入①的生成阶段。
 
 ## 内置能力
 
-- 🎬 Seedance 2.5 满血版：4–30 秒、720P、同步音频、多模态参考（30 图 / 10 视频 / 10 音频）
+- 🎬 动态视频目录：从 `/api/pricing` 获取当前视频模型、价格版本、能力说明、分组和端点；再与 `/api/user/models`、`/v1/models` 交叉验证
+- 💰 账户与计费：只读查询余额，按实时计价单位显示单价，并在付费提交前计算本次估算金额
+- 🎧 `gemini-3.7-flash`：默认用于视频音频反推，一次拆出台词、BGM 和音效时间线
 - 🖼 gpt-image-2 生图：关键帧预审、人物/产品/场景锚定图（跨段一致性）
 - 👤 授权人物直传：用户另行提供并指定的人物原图作为唯一身份权威，每张关键帧与视频请求都直接携带，避免 AI 图套 AI 图造成身份漂移和合成感
 - 🔍 反推：ffmpeg 抽帧 + Codex 逐帧观察，零 API 成本，证据优先防幻觉
@@ -29,39 +31,48 @@
 
 - Codex 插件功能 + Node.js 18+
 - ffmpeg（反推与拼接需要）
-- 一个 88api.ai Key（`auto` 分组，或包含视频与生图模型分组）
+- 一个 88api.ai API Key（建议 `auto` 分组，用于生成）
+- 一个 88api.ai 个人访问令牌（用于只读查询余额、价格、能力和状态）
 
-## 创建并配置 88API Key
+## 创建并配置 88API 凭据
 
 ### 1. 注册并登录
 
 打开 [88api.ai](https://88api.ai/) 注册账号并登录。
 
-### 2. 创建 API Key
+### 2. 创建生成 API Key
 
 进入“API 密钥”页面，点击“创建 API 密钥”。名称可以自定义（例如 `Seedance Studio`），分组建议选择 `auto`（自动分组），以便同时调用 Seedance 视频模型和 Image-2 关键帧模型。如需在当前分组请求失败时继续尝试下一分组，可以开启“跨分组重试”。
 
 ![创建 88API Key](docs/assets/88api-create-image-key.png)
 
-### 3. 复制 Key
+### 3. 创建个人访问令牌
 
-创建完成后，复制 Key 的完整内容。Key 只用于你自己的 Codex 配置，请勿粘贴到 Issue、公开聊天、仓库文件或截图中。
+进入 **“个人资料 → 安全”**，创建系统访问令牌。该令牌用于 `/api/*` 账户接口，与生成 API Key 不同；插件会通过 `/api/user/self` 自动识别用户 ID。
+
+### 4. 复制两项凭据
+
+创建完成后，分别复制 API Key 和个人访问令牌的完整内容。两者都只用于你自己的 Codex 配置，请勿粘贴到 Issue、公开聊天、仓库文件或截图中。
 
 ![复制 88API Key](docs/assets/88api-copy-key.png)
 
-### 4. 让 Agent 一键配置（推荐）
+### 5. 让 Agent 一键配置（推荐）
 
-安装插件后直接向 **88API-Seedance-Studio** 描述视频需求。Agent 会先自动检查 Key；如果尚未配置，它会主动请你提供完整 Key。你只需把 Key 发给 Agent，Agent 会自动保存、脱敏核验并继续原任务，不需要打开 PowerShell。
+安装插件后直接向 **88API-Seedance-Studio** 描述视频需求。Agent 会检查两项凭据：API Key 可交给受信任的 Agent 一键配置；个人访问令牌由 Agent 启动隐藏输入助手，你在本机交互窗口中输入，令牌不会进入聊天或命令参数。验证后插件会查询余额并显示实时模型列表；你选择模型后，它继续原任务。
 
-Key 会保存在本机 `~/.seedance-studio/config.json`。Agent 不会在回复中显示完整 Key，验证过程也不会发起付费生成任务。
+API Key 与模型选择保存在本机 `~/.seedance-studio/config.json`；个人访问令牌保存到 `SEEDANCE_STUDIO_ACCESS_TOKEN` Windows 用户环境变量，用户 ID 自动保存到 `SEEDANCE_STUDIO_USER_ID`。Agent 不会在回复中显示完整凭据；账户、目录和自检不会发起付费生成。
 
-> 仅在自己信任的 Codex 任务中提供 Key，不要把 Key 发布到 GitHub Issue、公开聊天、仓库文件或截图中。
+> 仅在自己信任的 Codex 任务中提供凭据，不要把 API Key 或个人访问令牌发布到 GitHub Issue、公开聊天、仓库文件或截图中。
 
 <details>
 <summary>高级用户：手动配置命令</summary>
 
 ```powershell
 node plugins/seedance-studio/scripts/studio.mjs --set-key "<YOUR_88API_KEY>"
+node plugins/seedance-studio/scripts/studio.mjs --configure-access-token
+node plugins/seedance-studio/scripts/studio.mjs account
+node plugins/seedance-studio/scripts/studio.mjs models
+node plugins/seedance-studio/scripts/studio.mjs --set-video-model "<EXACT_MODEL_ID>"
 node plugins/seedance-studio/scripts/studio.mjs --get-config
 node plugins/seedance-studio/scripts/studio.mjs --self-test
 node plugins/seedance-studio/scripts/studio.mjs --caps
@@ -72,8 +83,9 @@ node plugins/seedance-studio/scripts/studio.mjs --caps
 ## 快速开始
 
 1. 安装插件（本仓库为标准 Codex 插件市场结构）。
-2. 直接描述视频需求；如未配置 Key，按 Agent 提示把 Key 发给它，由 Agent 一键完成配置。
-3. 在 Codex 新任务里说人话：
+2. 直接描述视频需求；按 Agent 提示配置 API Key 和个人访问令牌。
+3. 从实时列表中明确选择视频模型。
+4. 在 Codex 新任务里说人话：
 
 ```text
 @88API-Seedance-Studio 做一个 45 秒的竖屏治愈短片：雨夜女孩把流浪猫带回家。
@@ -84,6 +96,9 @@ node plugins/seedance-studio/scripts/studio.mjs --caps
 ## CLI 直接使用（可选）
 
 ```powershell
+node plugins/seedance-studio/scripts/studio.mjs account --json
+node plugins/seedance-studio/scripts/studio.mjs models --json
+node plugins/seedance-studio/scripts/studio.mjs --set-video-model "Seedance-2.5-720p官方版"
 node plugins/seedance-studio/scripts/studio.mjs video --prompt "雨夜东京街头，银色跑车驶过，霓虹倒影，电影级跟拍" --duration 10 --ratio 16:9
 node plugins/seedance-studio/scripts/studio.mjs video --prompt "..." --image product.jpg --duration 8 --dry-run
 node plugins/seedance-studio/scripts/studio.mjs video --prompt "..." --identity-image person.jpg --first-frame opening.png --duration 8 --dry-run
@@ -95,10 +110,12 @@ node plugins/seedance-studio/scripts/studio.mjs concat --dir seedance-projects/d
 
 ## 边界说明
 
-- API 生成面为 4–30 秒 / 720P；更长成片由插件自动拆段 + 拼接。即梦网页版专属能力（180 秒原生超长、局部编辑、绿幕、白模）不经 API；需要时插件生成可粘贴到即梦网页的提示词作为降级。
-- 视频/音频参考素材需公网可直连 URL；图片参考走 base64 无此限制。
+- 时长、分辨率、画幅、参考素材和声音能力以用户所选模型的实时目录说明为准，不得把 Seedance 能力套到其它模型。
+- 当前 CLI 只允许目录端点类型含 `openai-video` 或 `video-generation` 的模型走 `/v1/videos`；其它视频模型会展示为“端点不兼容”。
+- `available` 表示目录、账户和 API Key 三层检查通过，不保证上游永远有容量；临时熔断仍可能发生。
+- 所选模型支持视频/音频参考时，素材必须是公网可直连 URL；本地图片参考走 base64。
 - 复刻参考视频中的原演员时生成新身份锚定图，不从原片抽帧；用户另行提供并明确指定的授权人物照片则保持为唯一身份权威，使用 `--identity-ref` / `--identity-image` 直传，禁止只在第一次生图后改用 AI 锚定图。BGM 不提取原曲（版权）。
-- Key 保存在本机 `~/.seedance-studio/config.json`，不要提交到任何仓库。
+- 两项凭据均为敏感信息；不要提交配置文件、粘贴到 Issue 或放进截图。
 
 ## 鸣谢与来源
 

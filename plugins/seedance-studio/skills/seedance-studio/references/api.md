@@ -1,4 +1,4 @@
-# 88api Seedance 2.5 API 速查
+# 88API 账户、模型目录与生成 API 速查
 
 来源：88api.ai 官方文档 `/zh/docs/api/video/seedance-2-5`（2026-08 抓取）。
 
@@ -7,11 +7,39 @@
 | 项目 | 值 |
 |---|---|
 | Base URL | `https://88api.ai` |
-| 视频模型名 | `seedance2.5满血版`（必须精确匹配） |
+| 视频模型名 | 不硬编码；从已鉴权的 `GET /api/pricing` 实时读取，用户明确选择后保存精确模型 ID |
 | 提交任务 | `POST /v1/videos` |
 | 查询任务 | `GET /v1/videos/{id}` |
 | 生图 | `POST /v1/images/generations`（gpt 文生图）· `POST /v1/images/edits`（gpt 参考图/垫图，multipart） |
 | 鉴权 | `Authorization: Bearer sk-xxxx` |
+
+## 双凭据与只读账户接口
+
+API Key 与个人访问令牌不得混用：
+
+| 凭据 | 创建位置 | 用途 |
+|---|---|---|
+| API Key | 88API“API 密钥”，建议 `auto` 分组 | `/v1/models` 与 `/v1/*` 生成调用 |
+| 个人访问令牌 | “个人资料 → 安全” | `/api/*` 账户、目录、价格与状态查询 |
+
+访问令牌请求使用 `Authorization: Bearer <access-token>`；`New-Api-User` 可选，插件先调用 `/api/user/self` 自动识别用户 ID。访问令牌不得放入聊天、命令行参数或 `config.json`；Windows 使用 `--configure-access-token` 隐藏输入并保存到 `SEEDANCE_STUDIO_ACCESS_TOKEN` 用户环境变量，插件也兼容既有的 `RELAY_88API_ACCESS_TOKEN`。生产环境已验证 `/api/pricing` 需要访问令牌，不能依赖匿名访问；`/api/ratio_config` 当前未启用。
+
+| 接口 | 用途 | 关键字段 |
+|---|---|---|
+| `GET /api/status` | 计价单位与配额换算 | `quota_per_unit`、`quota_display_type` |
+| `GET /api/user/self` | 余额与账户状态 | `quota`、`used_quota`、`group`、`status` |
+| `GET /api/pricing` | 实时模型、价格、能力、分组、端点 | `data[]`、`group_ratio`、`auto_groups`、`supported_endpoint`、`pricing_version` |
+| `GET /api/user/models` | 当前账户可见模型 | `data[]` 精确模型 ID |
+| `GET /v1/models` | 当前 API Key 可调用模型 | `data[].id` |
+
+余额按 `/api/user/self.data.quota / /api/status.data.quota_per_unit` 换算；`quota` 是当前剩余额度，不再减 `used_quota`。视频模型筛选以“视频模型”分组或视频端点为证据；当前 CLI 只允许 `supported_endpoint_types` 含 `openai-video` 或 `video-generation` 的模型走 `/v1/videos`。状态分层如下：
+
+- `available`：实时目录存在、账户可见、当前 API Key 的 `/v1/models` 可见且端点兼容。
+- `unverified_key`：目录和账户可见，但 API Key 未配置或验证失败；不得付费生成。
+- `not_in_api_key`：目录和账户可见，但当前 API Key 不可用。
+- `unsupported_endpoint`：是视频模型，但当前 CLI 没有对应生成端点适配；只展示，不允许选择。
+
+`billing_mode=per_second` 时，实际单价 = `model_price × 自动分组倍率`，单位取 `/api/status` 的展示币种；提交前记录 `pricing_version` 和获取时间。该可用状态不是上游容量健康保证，临时熔断仍可能发生。
 
 ## 生图模型（关键帧 / 锚定图，gpt-image 家族，2026-08 实测）
 
@@ -43,22 +71,24 @@
 
 反推要读台词/BGM/音效，但 **88api 当前没有可用的专用 STT 转写渠道**：`POST /v1/audio/transcriptions` 端点在、但 `whisper-1` / `whisper-large-v3` / `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` / `sensevoice-v1` / `qwen3-asr-flash` 实测全回 `503 model_not_found · No available channel … under group auto`；`gemini-3.1-tts` 拿去转写回 `Vertex AI only supports audio speech requests`（只能合成）。`/v1/models` 里唯一音频相关就是 `gemini-3.1-tts`（TTS）。
 
-**可用路径 = Gemini 多模态**（`POST /v1/chat/completions`，`content[]` 放 `input_audio`）：`gemini-3.6-flash`（插件默认，思考模型拆得更透）/ `gemini-2.5-flash` 实测 **200**，计费 `usage.prompt_tokens_details.audio_tokens` 那一档确认音频被当独立模态吃进去（约 25 tokens/秒）。一次拆出 台词转写 / BGM风格描述 / 音效时间轴。
+**可用路径 = Gemini 多模态**（`POST /v1/chat/completions`，`content[]` 放 `input_audio`）：插件默认 `gemini-3.7-flash`。一次拆出台词转写、BGM 风格描述和音效时间轴。
 
 ```jsonc
-{ "model": "gemini-3.6-flash", "messages": [{ "role": "user", "content": [
+{ "model": "gemini-3.7-flash", "messages": [{ "role": "user", "content": [
   { "type": "text",        "text": "转写台词并描述BGM与音效…" },
   { "type": "input_audio", "input_audio": { "data": "<base64>", "format": "mp3" } } ] }] }
 ```
 
-- CLI：`audio --video <片> [--audio 文件] [--start/--end 秒] [--model gemini-2.5-flash] [--separate]`（`--separate` 走本地 Demucs 分人声/伴奏供人耳核对，缺依赖自动降级）。
+- CLI：`audio --video <片> [--audio 文件] [--start/--end 秒] [--model gemini-3.7-flash] [--separate]`（`--separate` 走本地 Demucs 分人声/伴奏供人耳核对，缺依赖自动降级）。
 - **局限**：时间戳是**模型估算、非帧级精准**；要词级精准需等 88api 挂上 whisper 渠道（届时 `--model whisper-1` 可改走 `/v1/audio/transcriptions`）。
 - **合规**：BGM 只描述、不逐字转录歌词、不提取原曲（版权）；转写仅用于反推分析。
 
-## 视频能力边界
+## Seedance 2.5 专属能力边界
+
+仅当用户在实时目录中明确选择 Seedance 2.5 时使用本节；其它模型不得套用这些限制或承诺。
 
 - 时长 4–30 秒（`duration` 整数或 `seconds` 字符串，二选一）
-- 分辨率：插件**固定输出 720p（1280×720）**；`480p` 上游实测可用（854×480）但插件不暴露为选项、统一 720p 交付；不支持 1080p/4k
+- 分辨率：当前实时目录中的 Seedance 2.5 官方模型 ID 为 720p，插件据此提交 `720p`；本节所述 2.5 能力不支持 1080p/4k
 - `ratio`: `auto, 21:9, 16:9, 4:3, 1:1, 3:4, 9:16`（优先级高于 `size`）
 - `size`（可选，与 ratio 二选一、ratio 优先）：720P 三档 `1280x720`(横) / `720x1280`(竖) / `720x720`(方)
 - `generate_audio` 默认 true；`seed` 整数，-1 随机
@@ -91,7 +121,7 @@
 
 **降级到即梦网页**（88api 不提供）：对口型、区域级局部编辑、白模控制、绿幕、4K、mov 高保真、强制水印——需要时产出可粘贴到即梦网页的提示词作降级。
 
-> 用法取向：**≤30 秒优先一条单段直出**（连续性优于多段拼接、缝更少更省钱）；>30 秒才拆段拼接（见 pipeline.md）。写长片提示词先定 30 秒故事弧（开场→推进→转折→收尾）再补镜头细节。
+> 仅在选择 Seedance 2.5 时：≤30 秒优先单段直出，>30 秒才拆段拼接。其它模型必须使用实时目录中的单段上限。
 > edit/extend 若首次 `generation_failed`，**换新子目录重试最多 2 次**（失败自动退款）——这是上游不稳，不是提示词问题。
 
 ## 任务生命周期

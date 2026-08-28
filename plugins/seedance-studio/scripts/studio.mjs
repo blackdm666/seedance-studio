@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// seedance-studio CLI — 88api.ai Seedance 2.5 video + gpt-image keyframes（默认 gpt-image-2；gpt-image-2-4k 仅在 --model 显式请求时调用）
+// seedance-studio CLI — 88api.ai dynamic video catalog + gpt-image keyframes
 // Zero-dependency Node 18+. Config: ~/.seedance-studio/config.json
-import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, readdirSync, statSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, extname, dirname, basename } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -9,17 +9,26 @@ import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
-const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const SCRIPT_DIR = dirname(SCRIPT_PATH);
 
 const CONFIG_DIR = join(homedir(), ".seedance-studio");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const DEFAULTS = {
   baseUrl: "https://88api.ai",
-  videoModel: "seedance2.5满血版",
+  videoModel: "",
   imageModel: "gpt-image-2",
+  accessToken: "",
+  userId: "",
   pollIntervalMs: 12000,
   pollTimeoutMs: 25 * 60 * 1000,
 };
+const ENV = {
+  apiKey: ["SEEDANCE_STUDIO_API_KEY"],
+  accessToken: ["SEEDANCE_STUDIO_ACCESS_TOKEN", "RELAY_88API_ACCESS_TOKEN"],
+  userId: ["SEEDANCE_STUDIO_USER_ID", "RELAY_88API_USER_ID"],
+};
+const VIDEO_ENDPOINT_TYPES = new Set(["openai-video", "video-generation"]);
 const AUTH_IDENTITY_VIDEO_LOCK = "【授权真人身份唯一基准】第一张普通参考图（不含首帧/尾帧）是用户明确授权使用的真人身份照片，只控制人物的脸、五官比例、发型、肤色、体型与稳定可见特征。首帧、尾帧及其它 AI 关键帧只控制场景、服装、构图和状态，不得改写人物身份；发生冲突时一律以该真人身份图为准。不要迁移身份图中的背景、镜面重复人物、文字、Logo 或无关物品。保留真实面部不对称、自然皮肤纹理与拍摄质感，禁止标准化美化和换脸。";
 const AUTH_IDENTITY_IMAGE_LOCK = "【授权真人身份唯一基准】第一张参考图是用户明确授权使用的真人身份照片，只控制人物的脸、五官比例、发型、肤色、体型与稳定可见特征。其它参考图只控制场景、服装、构图或风格，不得改写身份；发生冲突时一律以第一张身份图为准。保留真实面部不对称、自然皮肤纹理与拍摄质感，禁止标准化美化和换脸。";
 function withIdentityLock(prompt, lock) {
@@ -90,28 +99,13 @@ function imgExt(buf) {
 }
 const MIME = { ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".webp":"image/webp", ".gif":"image/gif" };
 const CAPS = [
-  "Seedance 2.5 能力边界（88api，插件已按此硬校验）：",
-  "  • 时长 4–30 秒（整数，按秒计费）",
-  "  • 分辨率 720p（1280×720，插件固定输出；不支持 1080p/4k）",
-  "  • 画幅 ratio: auto / 21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16",
-  "  • 图片参考 ≤30 张（本地图自动转 base64，无需公网 URL）",
-  "  • 视频参考 ≤10 个（必须公网直连 http(s) URL；官方：每段 2–30s、总时长 ≤30s）",
-  "  • 音频参考 ≤10 个（必须公网直连 http(s) URL；官方：每段 2–30s、总时长 ≤30s）",
-  "  • 同步音频 generate_audio 默认开；seed 可控（-1 随机）",
-  "原生有声（写进提示词即可，与后端无关）：",
-  "  • 声音语法 音乐() 音效<> 台词{} 字幕【】",
-  "  • 11 语言原生配音：中/英/西/印尼/马来/泰/阿/葡/越/日/韩（中文台词直出普通话）",
-  "  • 注意：原生台词是「配音/画外音」，不是对口型——人物嘴型不跟随（需口型请走即梦网页对口型）",
-  "88api 实测透传（2026-08 三档实测，可用）：",
-  "  • 首帧 first_frame / 首尾帧 first+last_frame（实测生效）",
-  "  • 视频参考 reference_video（迁运镜）/ 音频参考 reference_audio（卡节奏）",
-  "  • 分辨率固定 720p（1280×720 实测生效）——480p 上游虽可用但插件统一 720p 交付、不暴露为选项",
-  "  • 视频编辑 edit / 视频延长 extend（可用但约 50% 成功率，需自动容错重试）",
-  "88api 实测忽略（缩水，别向用户承诺）：",
-  "  • output_format:mov —— 被忽略，统一回吐标准 mp4（isom/yuv420p）",
-  "  • watermark:true —— 被忽略，成片无水印",
-  "硬约束（插件已前置校验）：",
-  "  • 视频/音频参考必须同时配 ≥1 张图片参考，否则 400（无纯视频参考/纯音频参考）",
+  "视频生成：从 88API /api/pricing 动态获取当前视频模型、价格、能力说明和端点兼容性。",
+  "  • 不再内置固定 Seedance 模型；首次生成前必须由用户明确选择模型。",
+  "  • `models` 合并账户可见模型与生成 API Key 的 /v1/models 结果，分开标注目录、账户和 Key 状态。",
+  "  • 时长、画幅、分辨率、参考图/视频/音频和首尾帧能力以当前模型目录为准，生成前重新校验。",
+  "  • 按秒计费模型会在 dry-run 和正式提交前显示实时单价、价格版本和本次估算金额。",
+  "账户：个人访问令牌只读调用 /api/user/self、/api/pricing、/api/status、/api/user/models；API Key 仅调用生成端点。",
+  "音频反推：默认 gemini-3.7-flash，通过 /v1/chat/completions 的 input_audio 一次拆解台词、BGM 与音效。",
   "生图（关键帧/锚定图，纯 gpt-image 家族，2026-08 实测）：",
   "  • 默认 gpt-image-2（OpenAI 上游，/v1/images）：稳定 2K 档（16:9≈2048×1152、2:3=1360×2048），出图稳、支持 --ref；不写 --model 即用它。网关侧对 image2 自带兜底，插件不再自建兜底链。",
   "  • gpt-image-2-4k（`--model 4k` / `--model gpt-image-2-4k` 显式请求）：16:9 出真 4K UHD 3840×2160；方图约 2880²（返回 URL）。88api 侧该渠道时有时无，断渠道直接报错、不自动回退。",
@@ -119,16 +113,47 @@ const CAPS = [
   "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——走 /v1/images/edits；功能三保产品/人物一致性首选",
 ];
 
+function readStoredConfig() {
+  if (!existsSync(CONFIG_PATH)) return {};
+  try { return JSON.parse(readFileSync(CONFIG_PATH, "utf8")); }
+  catch { return {}; }
+}
+function firstEnv(names) {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value && String(value).trim()) return String(value).trim();
+    if (process.platform === "win32") {
+      const script = "[Environment]::GetEnvironmentVariable('" + name.replace(/'/g, "''") + "','User')";
+      const result = spawnSync("powershell", ["-NoProfile", "-Command", script], { encoding: "utf8", windowsHide: true });
+      const userValue = result.status === 0 ? String(result.stdout || "").trim() : "";
+      if (userValue) return userValue;
+    }
+  }
+  return "";
+}
 function loadConfig() {
-  let c = {};
-  if (existsSync(CONFIG_PATH)) { try { c = JSON.parse(readFileSync(CONFIG_PATH, "utf8")); } catch { c = {}; } }
-  return { ...DEFAULTS, ...c };
+  const stored = readStoredConfig();
+  return {
+    ...DEFAULTS,
+    ...stored,
+    apiKey: firstEnv(ENV.apiKey) || stored.apiKey || "",
+    accessToken: firstEnv(ENV.accessToken),
+    userId: firstEnv(ENV.userId) || stored.userId || "",
+  };
 }
-function saveConfig(c) {
+function saveConfigPatch(patch) {
   mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(CONFIG_PATH, JSON.stringify(c, null, 2));
+  const stored = readStoredConfig();
+  delete stored.accessToken;
+  writeFileSync(CONFIG_PATH, JSON.stringify({ ...stored, ...patch }, null, 2), { encoding: "utf8", mode: 0o600 });
+  try { chmodSync(CONFIG_PATH, 0o600); } catch { /* Windows may not expose POSIX mode bits. */ }
 }
-function mask(k) { return !k ? "(not set)" : k.slice(0, 6) + "..." + k.slice(-4); }
+function mask(k) {
+  if (!k) return "(not set)";
+  const s = String(k);
+  if (s.length <= 10) return s.slice(0, 2) + "..." + s.slice(-2);
+  return s.slice(0, 6) + "..." + s.slice(-4);
+}
 // die 不再同步 process.exit()——那会在 undici 连接句柄关闭中途触发 Windows libuv 断言崩溃。
 // 改为抛错，由顶层统一打印并设置 exitCode，让事件循环自然收尾。
 function die(msg) { const e = new Error(msg); e.isDie = true; throw e; }
@@ -186,6 +211,10 @@ function requireKey(cfg) {
   if (!cfg.apiKey) die('未配置 API Key。通过 Codex 使用时，请把 88API Key 发给 Agent，由 Agent 为你一键配置；无需自己运行 PowerShell。');
   return cfg.apiKey;
 }
+function requireAccessToken(cfg) {
+  if (!cfg.accessToken) die('未配置 88API 个人访问令牌。请登录 https://88api.ai/，进入“个人资料 → 安全”，创建系统访问令牌后交给 Agent 一键配置。访问令牌只用于读取账户余额、模型目录、价格和可用状态，不用于付费生成。');
+  return cfg.accessToken;
+}
 async function api(cfg, method, path, body) {
   const res = await fetch(cfg.baseUrl + path, {
     method,
@@ -195,6 +224,27 @@ async function api(cfg, method, path, body) {
   const text = await res.text();
   let json; try { json = JSON.parse(text); } catch { json = { raw: text.slice(0, 500) }; }
   if (!res.ok) {
+    const msg = (json && json.error && json.error.message) || json.message || text.slice(0, 300);
+    const err = new Error("HTTP " + res.status + ": " + msg);
+    err.status = res.status; err.body = json;
+    throw err;
+  }
+  return json;
+}
+async function dashboardApi(cfg, method, path, body, options = {}) {
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
+  if (options.auth !== false) {
+    headers.Authorization = "Bearer " + requireAccessToken(cfg);
+    if (cfg.userId) headers["New-Api-User"] = String(cfg.userId);
+  }
+  const res = await fetch(cfg.baseUrl + path, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = { raw: text.slice(0, 500) }; }
+  if (!res.ok || json.success === false) {
     const msg = (json && json.error && json.error.message) || json.message || text.slice(0, 300);
     const err = new Error("HTTP " + res.status + ": " + msg);
     err.status = res.status; err.body = json;
@@ -227,13 +277,272 @@ async function downloadBuf(url) {
   return Buffer.from(await res.arrayBuffer());
 }
 
+// ---------- 88API account + dynamic video catalog ----------
+function listOf(value) {
+  if (Array.isArray(value)) return value.map(String);
+  if (value == null || value === "") return [];
+  return String(value).split(",").map((x) => x.trim()).filter(Boolean);
+}
+function unique(values) { return [...new Set(values.filter(Boolean))]; }
+function finiteNumber(value, fallback = null) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+function inferResolution(modelName, description) {
+  const text = (String(modelName || "") + " " + String(description || "")).toLowerCase();
+  for (const item of [["4k", "4k"], ["2k", "2k"], ["1440p", "1440p"], ["1080p", "1080p"], ["768p", "768p"], ["720p", "720p"], ["480p", "480p"]]) {
+    if (text.includes(item[0])) return item[1];
+  }
+  return "";
+}
+function inferVideoCapabilities(row) {
+  const description = String(row.description || "");
+  const modelName = String(row.model_name || "");
+  const text = modelName + " " + description;
+  const durationMatch = text.match(/(\d+)\s*[–—~\-]\s*(\d+)\s*秒/i);
+  const maxDurationMatch = text.match(/(?:最大支持|最长(?:支持)?|支持)\s*(\d+)\s*秒/i);
+  const defaultDurationMatch = text.match(/默认\s*(\d+)\s*秒/i);
+  const ratios = unique(text.match(/(?:21:9|16:9|9:16|1:1|4:3|3:4)/g) || []);
+  const maxImages = finiteNumber((text.match(/最多\s*(\d+)\s*张参考图/i) || [])[1]);
+  const maxVideos = finiteNumber((text.match(/(?:最多\s*)?(\d+)\s*个参考视频/i) || [])[1]);
+  const maxAudios = finiteNumber((text.match(/(?:最多\s*)?(\d+)\s*个参考音频/i) || [])[1]);
+  const noImageReference = /不提供参考图|无参考轻量版/i.test(text);
+  const noVideoReference = /不提供[^。；]*参考视频|无参考轻量版/i.test(text);
+  const noAudioReference = /不提供[^。；]*参考音频|无参考轻量版/i.test(text);
+  const yesImageReference = /图生视频|参考图|图片[^。；]*生成视频|多图参考|支持文本、图片/i.test(text);
+  const yesVideoReference = /参考视频|支持[^。；]*视频输入/i.test(text);
+  const yesAudioReference = /参考音频|支持[^。；]*音频/i.test(text);
+  const supportValue = (yes, no) => no ? false : yes ? true : null;
+  return {
+    textToVideo: /文生视频|文字[^。；]*生成视频|纯文本生成视频|文本生成视频|支持文本、图片|支持文本、图片、音频和视频输入/i.test(text) ? true : null,
+    imageReference: supportValue(yesImageReference, noImageReference),
+    videoReference: supportValue(yesVideoReference, noVideoReference),
+    audioReference: supportValue(yesAudioReference, noAudioReference),
+    firstLastFrame: /首尾帧/i.test(text) ? true : null,
+    generatedAudio: /音效生成|同步音频|带音频|预设语音|seedance-2\.5/i.test(text) ? true : null,
+    resolution: inferResolution(modelName, description),
+    minDuration: durationMatch ? Number(durationMatch[1]) : null,
+    maxDuration: durationMatch ? Number(durationMatch[2]) : maxDurationMatch ? Number(maxDurationMatch[1]) : null,
+    defaultDuration: defaultDurationMatch ? Number(defaultDurationMatch[1]) : null,
+    ratios,
+    maxImages,
+    maxVideos,
+    maxAudios,
+  };
+}
+function pickAutoGroup(row, pricing) {
+  const groups = listOf(row.enable_groups || row.enable_group);
+  const autoGroups = listOf(pricing.auto_groups);
+  return autoGroups.find((group) => groups.includes(group)) || groups[0] || "auto";
+}
+function normalizeVideoPrice(row, pricing, status) {
+  const billingMode = String(row.billing_mode || (Number(row.quota_type) === 1 ? "per_request" : "legacy"));
+  const group = pickAutoGroup(row, pricing);
+  const multiplier = finiteNumber(pricing.group_ratio && pricing.group_ratio[group], 1);
+  const currency = String((status.data && status.data.quota_display_type) || "CNY");
+  if (Number(row.quota_type) === 1 || billingMode === "per_second" || finiteNumber(row.model_price, 0) > 0) {
+    const base = finiteNumber(row.model_price, 0);
+    const unit = billingMode === "per_second" ? "second" : "request";
+    return { billingMode, currency, unit, base, multiplier, effective: base * multiplier, group };
+  }
+  const quotaPerUnit = finiteNumber(status.data && status.data.quota_per_unit, 500000);
+  const inputPerMillion = finiteNumber(row.model_ratio, 0) * (1000000 / quotaPerUnit) * multiplier;
+  return { billingMode, currency, unit: "million_input_tokens", base: inputPerMillion / multiplier, multiplier, effective: inputPerMillion, group };
+}
+function isVideoCatalogRow(row) {
+  const groups = listOf(row.enable_groups || row.enable_group);
+  const endpoints = listOf(row.supported_endpoint_types);
+  return groups.includes("视频模型") || endpoints.some((x) => VIDEO_ENDPOINT_TYPES.has(x)) || /视频|video/i.test(String(row.description || ""));
+}
+function endpointCompatible(row) {
+  return listOf(row.supported_endpoint_types).some((x) => VIDEO_ENDPOINT_TYPES.has(x));
+}
+function availabilityLabel(value) {
+  return ({
+    available: "可用",
+    unverified_key: "账户可见·待 Key 验证",
+    not_in_api_key: "当前 API Key 不可用",
+    not_visible: "账户不可见",
+    unsupported_endpoint: "当前插件端点不兼容",
+  })[value] || value;
+}
+async function fetchGenerationModelIds(cfg) {
+  if (!cfg.apiKey) return { ids: null, error: "API Key 未配置" };
+  try {
+    const response = await api(cfg, "GET", "/v1/models");
+    return { ids: new Set((response.data || []).map((item) => String(item.id))), error: "" };
+  } catch (error) {
+    return { ids: null, error: error.message };
+  }
+}
+async function fetchVideoCatalog(cfg, options = {}) {
+  const [pricing, status, visibleResponse] = await Promise.all([
+    dashboardApi(cfg, "GET", "/api/pricing"),
+    dashboardApi(cfg, "GET", "/api/status", undefined, { auth: false }),
+    dashboardApi(cfg, "GET", "/api/user/models"),
+  ]);
+  const visible = new Set(listOf(visibleResponse.data));
+  const keyResult = options.checkApiKey === false ? { ids: null, error: "未检查 API Key" } : await fetchGenerationModelIds(cfg);
+  const vendors = new Map();
+  for (const vendor of (pricing.vendors || [])) vendors.set(String(vendor.id), vendor);
+  const models = (pricing.data || []).filter(isVideoCatalogRow).map((row) => {
+    const endpoints = listOf(row.supported_endpoint_types);
+    const compatible = endpointCompatible(row);
+    const userVisible = visible.has(String(row.model_name));
+    const keyVisible = keyResult.ids ? keyResult.ids.has(String(row.model_name)) : null;
+    let availability = "available";
+    if (!compatible) availability = "unsupported_endpoint";
+    else if (!userVisible) availability = "not_visible";
+    else if (keyVisible === false) availability = "not_in_api_key";
+    else if (keyVisible == null) availability = "unverified_key";
+    const price = normalizeVideoPrice(row, pricing, status);
+    return {
+      id: String(row.model_name),
+      description: String(row.description || ""),
+      vendor: (vendors.get(String(row.vendor_id)) || {}).name || String(row.vendor_id || ""),
+      enabledGroups: listOf(row.enable_groups || row.enable_group),
+      endpointTypes: endpoints,
+      endpointCompatible: compatible,
+      userVisible,
+      apiKeyVisible: keyVisible,
+      availability,
+      availabilityLabel: availabilityLabel(availability),
+      selectable: compatible && userVisible && keyVisible === true,
+      price,
+      capabilities: inferVideoCapabilities(row),
+    };
+  }).sort((a, b) => Number(b.selectable) - Number(a.selectable)
+    || Number(b.endpointCompatible) - Number(a.endpointCompatible)
+    || Number(b.userVisible) - Number(a.userVisible)
+    || a.vendor.localeCompare(b.vendor, "zh-CN")
+    || a.id.localeCompare(b.id, "zh-CN"));
+  return {
+    retrievedAt: new Date().toISOString(),
+    pricingVersion: pricing.pricing_version || "",
+    currency: String((status.data && status.data.quota_display_type) || "CNY"),
+    apiKeyCheck: { checked: Boolean(keyResult.ids), error: keyResult.error },
+    models,
+  };
+}
+function money(value, currency) {
+  if (!Number.isFinite(Number(value))) return "未知";
+  const prefix = String(currency).toUpperCase() === "CNY" ? "¥" : String(currency) + " ";
+  return prefix + Number(value).toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+}
+function priceLabel(price) {
+  const unit = price.unit === "second" ? "秒" : price.unit === "request" ? "次" : "百万输入 Token";
+  return money(price.effective, price.currency) + "/" + unit + (price.multiplier !== 1 ? "（" + price.group + " ×" + price.multiplier + "）" : "");
+}
+function modelSummary(model) {
+  const c = model.capabilities;
+  const pieces = [];
+  if (c.resolution) pieces.push(c.resolution);
+  if (c.minDuration && c.maxDuration) pieces.push(c.minDuration + "–" + c.maxDuration + "秒");
+  else if (c.maxDuration) pieces.push("最长 " + c.maxDuration + "秒");
+  else if (c.minDuration) pieces.push("最短 " + c.minDuration + "秒");
+  if (c.textToVideo) pieces.push("文生视频");
+  if (c.imageReference) pieces.push("图/参考图");
+  if (c.videoReference) pieces.push("参考视频");
+  if (c.audioReference) pieces.push("参考音频");
+  if (c.firstLastFrame) pieces.push("首尾帧");
+  if (c.generatedAudio) pieces.push("生成音频");
+  return pieces.join(" · ") || model.description || "目录未提供能力摘要";
+}
+async function fetchAccount(cfg) {
+  const [self, status] = await Promise.all([
+    dashboardApi(cfg, "GET", "/api/user/self"),
+    dashboardApi(cfg, "GET", "/api/status", undefined, { auth: false }),
+  ]);
+  const user = self.data || {};
+  const quotaPerUnit = finiteNumber(status.data && status.data.quota_per_unit, 500000);
+  const currency = String((status.data && status.data.quota_display_type) || "CNY");
+  return {
+    id: user.id,
+    username: user.username || "",
+    group: user.group || "",
+    status: user.status,
+    currency,
+    quotaPerUnit,
+    balance: finiteNumber(user.quota, 0) / quotaPerUnit,
+    used: finiteNumber(user.used_quota, 0) / quotaPerUnit,
+    requestCount: finiteNumber(user.request_count, 0),
+  };
+}
+async function cmdAccount(cfg, args) {
+  const account = await fetchAccount(cfg);
+  if (args.json) { log(JSON.stringify(account, null, 2)); return; }
+  log("88API 账户: " + (account.username || "用户 #" + account.id) + "（分组 " + account.group + "）");
+  log("余额: " + money(account.balance, account.currency));
+  log("累计使用: " + money(account.used, account.currency) + " · 请求 " + account.requestCount + " 次");
+}
+async function cmdModels(cfg, args) {
+  const catalog = await fetchVideoCatalog(cfg, { checkApiKey: !args["no-key-check"] });
+  if (args.json) { log(JSON.stringify(catalog, null, 2)); return catalog; }
+  log("88API 当前视频模型 · 价格版本 " + catalog.pricingVersion + " · " + catalog.retrievedAt);
+  if (!catalog.apiKeyCheck.checked) log("[提示] 未完成生成 API Key 验证：" + catalog.apiKeyCheck.error);
+  let index = 0;
+  for (const model of catalog.models) {
+    index++;
+    log(index + ". " + model.id + " · " + priceLabel(model.price) + " · " + model.availabilityLabel);
+    const summary = modelSummary(model);
+    log("   能力: " + summary);
+    if (model.description && model.description !== summary) log("   目录: " + model.description);
+  }
+  if (catalog.apiKeyCheck.checked) log("选择后保存: node studio.mjs --set-video-model \"<模型ID>\"");
+  else log("当前只完成目录/账户查询；请先配置有效 API Key，再保存模型选择。");
+  return catalog;
+}
+async function cmdSetVideoModel(cfg, modelId) {
+  const catalog = await fetchVideoCatalog(cfg);
+  if (!catalog.apiKeyCheck.checked) die("无法验证生成 API Key 的模型可用状态，未保存选择: " + catalog.apiKeyCheck.error);
+  const model = catalog.models.find((item) => item.id === modelId);
+  if (!model) die("88API 当前视频目录中没有模型: " + modelId + "。先运行 models 查看实时列表。");
+  if (!model.selectable) die("该模型当前不能由本插件选择: " + model.availabilityLabel + "（端点 " + model.endpointTypes.join(", ") + "）");
+  saveConfigPatch({ videoModel: model.id, videoModelSelectedAt: new Date().toISOString(), videoPricingVersion: catalog.pricingVersion });
+  log("视频模型已保存: " + model.id + " · " + priceLabel(model.price));
+  log("能力: " + modelSummary(model));
+  return model;
+}
+function cmdConfigureAccessToken() {
+  if (process.platform !== "win32") {
+    die("安全配置助手当前仅支持 Windows。请在系统安全环境中设置 SEEDANCE_STUDIO_ACCESS_TOKEN；可选设置 SEEDANCE_STUDIO_USER_ID。不要把访问令牌放在命令行参数或普通配置文件中。");
+  }
+  const helper = join(SCRIPT_DIR, "configure_access_token.ps1");
+  const result = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper], { stdio: "inherit" });
+  if (result.error) die("无法启动访问令牌安全配置助手: " + result.error.message);
+  if (result.status !== 0) die("访问令牌配置未完成。");
+  log("配置已完成。后续命令会从 Windows 用户环境变量读取访问令牌；不会写入 " + CONFIG_PATH + "。");
+}
+async function selectedVideoModel(cfg, args) {
+  const selectedId = String(args.model || cfg.videoModel || "").trim();
+  if (!selectedId) die("尚未选择视频模型。先运行 `node studio.mjs models` 获取 88API 当前视频模型、价格和能力，让用户明确选择后再执行 --set-video-model。");
+  const catalog = await fetchVideoCatalog(cfg);
+  if (!catalog.apiKeyCheck.checked) die("生成 API Key 验证失败，不能提交付费任务: " + catalog.apiKeyCheck.error);
+  const model = catalog.models.find((item) => item.id === selectedId);
+  if (!model) die("已选模型已不在 88API 当前目录: " + selectedId + "。请重新运行 models 并让用户选择。");
+  if (!model.selectable) die("已选模型当前不可用: " + selectedId + " · " + model.availabilityLabel + "。请重新运行 models 并选择可用模型。");
+  return { model, catalog };
+}
+
 // ---------- video ----------
-function buildVideoPayload(cfg, args) {
+function buildVideoPayload(cfg, args, modelInfo) {
   let prompt = args.prompt ? String(args.prompt) : "";
-  const duration = args.duration ? parseInt(args.duration, 10) : 10;
-  if (!(duration >= 4 && duration <= 30)) die("duration 必须在 4–30 秒之间，当前: " + args.duration);
+  const capabilities = modelInfo.capabilities || {};
+  const minDuration = capabilities.minDuration;
+  const maxDuration = capabilities.maxDuration;
+  const defaultDuration = capabilities.defaultDuration;
+  if (args.duration === undefined && defaultDuration == null) {
+    die("模型 " + modelInfo.id + " 的实时目录没有提供默认时长；请根据目录说明让用户明确给出 --duration，插件不会猜测。");
+  }
+  const duration = args.duration !== undefined ? parseInt(args.duration, 10) : defaultDuration;
+  if (!Number.isInteger(duration) || duration <= 0) die("duration 必须是正整数秒，当前: " + args.duration);
+  if (minDuration != null && duration < minDuration) die("模型 " + modelInfo.id + " 的最短时长为 " + minDuration + " 秒，当前: " + duration);
+  if (maxDuration != null && duration > maxDuration) die("模型 " + modelInfo.id + " 的最长时长为 " + maxDuration + " 秒，当前: " + duration);
   const ratio = String(args.ratio || "16:9");
   if (!RATIOS.includes(ratio)) die("ratio 仅支持: " + RATIOS.join(", "));
+  if (capabilities.ratios && capabilities.ratios.length && !capabilities.ratios.includes(ratio)) {
+    die("模型 " + modelInfo.id + " 当前目录声明的 ratio 仅支持: " + capabilities.ratios.join(", "));
+  }
   const identityImages = asArray(args["identity-image"]).map(String);
   const regularImages = asArray(args.image).map(String);
   if (identityImages.length > 1) die("--identity-image 当前只允许 1 张授权真人身份图，避免多个身份权威互相冲突");
@@ -249,9 +558,16 @@ function buildVideoPayload(cfg, args) {
   const audioUrls = asArray(args["audio-url"]);
   const firstFrame = args["first-frame"] ? String(args["first-frame"]) : "";
   const lastFrame = args["last-frame"] ? String(args["last-frame"]) : "";
-  if (images.length > 30) die("图片参考最多 30 张（含 --identity-image）");
-  if (videoUrls.length > 10) die("视频参考最多 10 个");
-  if (audioUrls.length > 10) die("音频参考最多 10 个");
+  const maxImages = capabilities.maxImages || 30;
+  const maxVideos = capabilities.maxVideos || 10;
+  const maxAudios = capabilities.maxAudios || 10;
+  if (images.length > maxImages) die("模型 " + modelInfo.id + " 的图片参考最多 " + maxImages + " 张（含 --identity-image）");
+  if (videoUrls.length > maxVideos) die("模型 " + modelInfo.id + " 的视频参考最多 " + maxVideos + " 个");
+  if (audioUrls.length > maxAudios) die("模型 " + modelInfo.id + " 的音频参考最多 " + maxAudios + " 个");
+  if ((images.length || firstFrame || lastFrame) && capabilities.imageReference === false) die("模型 " + modelInfo.id + " 的当前目录明确不支持图片参考/图生视频");
+  if (videoUrls.length && capabilities.videoReference === false) die("模型 " + modelInfo.id + " 的当前目录明确不支持参考视频");
+  if (audioUrls.length && capabilities.audioReference === false) die("模型 " + modelInfo.id + " 的当前目录明确不支持参考音频");
+  if ((firstFrame || lastFrame) && capabilities.firstLastFrame === false) die("模型 " + modelInfo.id + " 的当前目录明确不支持首尾帧");
   for (const u of [...videoUrls, ...audioUrls]) {
     if (!/^https?:\/\//.test(u)) die("视频/音频参考必须是公网 http(s) URL（本地文件不支持，需先上传对象存储）: " + u);
   }
@@ -259,16 +575,17 @@ function buildVideoPayload(cfg, args) {
   // 实测硬约束（88api 后端）：带视频/音频参考时必须至少配 1 张图片参考（首帧/尾帧也算），
   // 否则上游直接 400: "video/audio reference requires at least one image reference"。
   // 这里前置拦截，省掉一次无谓的失败提交。
-  if ((videoUrls.length || audioUrls.length) && !hasImageAnchor) {
+  if (/seedance-2\.5/i.test(modelInfo.id) && (videoUrls.length || audioUrls.length) && !hasImageAnchor) {
     die("88api 约束：使用视频/音频参考时必须同时提供至少 1 张图片参考（--image / --first-frame <图>）。\n纯视频参考或纯音频参考在本后端不支持——请补一张锚定图/关键帧一起提交。");
   }
   const payload = {
-    model: cfg.videoModel,
+    model: modelInfo.id,
     duration,
     ratio,
-    resolution: "720p",
-    generate_audio: !args["no-audio"],
   };
+  if (args["no-audio"]) payload.generate_audio = false;
+  else if (args.audio || capabilities.generatedAudio === true) payload.generate_audio = true;
+  if (["480p", "720p", "1080p", "2k", "4k"].includes(capabilities.resolution)) payload.resolution = capabilities.resolution;
   if (args.seed !== undefined) payload.seed = parseInt(args.seed, 10);
   const hasMulti = images.length || videoUrls.length || audioUrls.length || firstFrame || lastFrame;
   if (!prompt) die("需要 --prompt 提示词");
@@ -317,7 +634,7 @@ async function pollTask(cfg, taskId, dir) {
     if (line !== lastStatus) { log("[poll] " + line); lastStatus = line; }
     if (st.status === "completed") {
       if (!st.video_url) die("任务完成但未返回 video_url，原始响应: " + JSON.stringify(st).slice(0, 400));
-      const dest = join(dir, "seedance_" + taskId.slice(-8) + ".mp4");
+      const dest = join(dir, "video_" + taskId.slice(-8) + ".mp4");
       log("[download] " + st.video_url.slice(0, 80) + "...");
       await download(st.video_url, dest);
       writeFileSync(join(dir, "result.json"), JSON.stringify(st, null, 2));
@@ -330,8 +647,16 @@ async function pollTask(cfg, taskId, dir) {
   }
 }
 async function cmdVideo(cfg, args) {
-  const payload = buildVideoPayload(cfg, args);
+  const [{ model, catalog }, account] = await Promise.all([selectedVideoModel(cfg, args), fetchAccount(cfg)]);
+  if (Number(account.status) !== 1) die("88API 账户当前不是正常状态（status=" + account.status + "），未提交付费任务。");
+  const payload = buildVideoPayload(cfg, args, model);
   const dir = outDir(args);
+  const estimatedCost = model.price.unit === "second" ? model.price.effective * payload.duration
+    : model.price.unit === "request" ? model.price.effective : null;
+  if (estimatedCost != null && account.balance < estimatedCost) {
+    die("88API 余额不足：当前 " + money(account.balance, account.currency) + "，本次估算 " + money(estimatedCost, model.price.currency) + "。未提交付费任务。");
+  }
+  const catalogAudit = { retrievedAt: catalog.retrievedAt, pricingVersion: catalog.pricingVersion, model: model.id, price: model.price, availability: model.availability, balanceBefore: account.balance, balanceCurrency: account.currency };
   const identitySources = asArray(args["identity-image"]).map(String).map((p) => /^https?:\/\//.test(p) ? p : resolve(p));
   const identityAudit = identitySources.length ? { mode: "authorized-direct", authority: "source-photo", sources: identitySources } : { mode: "generated-or-unspecified", sources: [] };
   if (identitySources.length) log("[IDENTITY] 授权真人原图已作为唯一身份权威直接附加；AI 首尾帧不得改写身份");
@@ -340,7 +665,13 @@ async function cmdVideo(cfg, args) {
     log("POST " + cfg.baseUrl + "/v1/videos");
     log("[IDENTITY-AUDIT] " + JSON.stringify(identityAudit));
     log(JSON.stringify(sanitizePayload(payload), null, 2));
-    log("[估算] " + payload.duration + " 秒视频（按秒计费，以 88api 后台价格为准）");
+    log("[模型] " + model.id + " · " + modelSummary(model));
+    log("[价格] " + priceLabel(model.price) + " · 目录版本 " + catalog.pricingVersion);
+    log("[余额] " + money(account.balance, account.currency));
+    if (estimatedCost != null) {
+      const formula = model.price.unit === "second" ? payload.duration + " 秒 × " + priceLabel(model.price) : "1 次 × " + priceLabel(model.price);
+      log("[估算] " + formula + " = " + money(estimatedCost, model.price.currency));
+    }
     return;
   }
   const runFile = join(dir, "run.json");
@@ -350,11 +681,13 @@ async function cmdVideo(cfg, args) {
   }
   const frameNote = payload.content ? (payload.content.some(c => c.role === "first_frame") ? ", first_frame" : "") + (payload.content.some(c => c.role === "last_frame") ? ", last_frame" : "") : "";
   const identityNote = identitySources.length ? ", identity=authorized-direct" : "";
-  log("[submit] POST /v1/videos (" + payload.duration + "s, " + payload.ratio + ", audio=" + payload.generate_audio + frameNote + identityNote + ")");
+  const audioMode = payload.generate_audio == null ? "model-default" : String(payload.generate_audio);
+  log("[submit] POST /v1/videos · " + model.id + " (" + payload.duration + "s, " + payload.ratio + ", audio=" + audioMode + frameNote + identityNote + ")");
+  log("[price] " + priceLabel(model.price) + (estimatedCost != null ? " · 本次估算 " + money(estimatedCost, model.price.currency) : "") + " · 当前余额 " + money(account.balance, account.currency));
   const task = await api(cfg, "POST", "/v1/videos", payload);
   const taskId = task.id || task.task_id;
   if (!taskId) die("提交响应中无任务 ID: " + JSON.stringify(task).slice(0, 400));
-  writeFileSync(runFile, JSON.stringify({ taskId, submittedAt: new Date().toISOString(), identityAudit, payload: sanitizePayload(payload) }, null, 2));
+  writeFileSync(runFile, JSON.stringify({ taskId, submittedAt: new Date().toISOString(), catalogAudit, estimatedCost, identityAudit, payload: sanitizePayload(payload) }, null, 2));
   log("[task] " + taskId + " (status=" + task.status + ")");
   if (args["no-wait"]) { log("稍后查询: node studio.mjs status --task " + taskId + ' --wait --out "' + dir + '"'); return; }
   await pollTask(cfg, taskId, dir);
@@ -373,7 +706,10 @@ async function cmdRaw(cfg, args) {
   if (!existsSync(p)) die("文件不存在: " + p);
   let payload;
   try { payload = JSON.parse(readFileSync(p, "utf8")); } catch (e) { die("payload JSON 解析失败: " + e.message); }
-  if (!payload.model) payload.model = cfg.videoModel;
+  if (!payload.model) {
+    if (!cfg.videoModel) die("raw payload 未指定 model，且尚未选择默认视频模型。先运行 models 并执行 --set-video-model。");
+    payload.model = cfg.videoModel;
+  }
   const dir = outDir(args);
   if (args["dry-run"]) {
     log("[DRY-RUN][raw] POST " + cfg.baseUrl + "/v1/videos");
@@ -775,9 +1111,9 @@ async function cmdDepth(cfg, args) {
 }
 // ---------- audio 拆解（反推⑦：人声转写 + BGM风格描述 + 音效时间轴）----------
 // 88api 无可用 STT 渠道（whisper/gpt-4o-transcribe 全 model_not_found），但 Gemini 多模态
-// （gemini-3.6-flash / 2.5-flash，实测 200、audio_tokens 计费确认真吃音频）能一次拆出
+// （默认 gemini-3.7-flash；input_audio 走 OpenAI Chat Completions 兼容端点）能一次拆出
 // 台词/BGM/音效——比纯 whisper 更全。时间戳是模型估算、非帧级精准（要词级精准等 whisper 渠道）。
-const AUDIO_MODEL_DEFAULT = "gemini-3.6-flash";
+const AUDIO_MODEL_DEFAULT = "gemini-3.7-flash";
 const AUDIO_PROMPT = [
   "你在做视频反推里的【音频拆解】。只写你真正听到的，听不清的标「不确定」，绝不编造。严格分三部分输出：",
   "【一、人声台词转写】逐句转写全部人声/对白/旁白/画外音，每句给大致时间戳（如 0:03–0:05）。完全没有人声就明确写「无人声台词」。语言非中文时标注语种并给原文。",
@@ -835,7 +1171,7 @@ async function cmdAudio(cfg, args) {
   try { json = await api(cfg, "POST", "/v1/chat/completions", body); }
   catch (e) {
     const cls = classifyImgError(e.message);
-    if (cls === "capacity") die(e.message + "\n[诊断] 该音频模型当前无可用渠道 → 换 --model gemini-2.5-flash 再试，或稍后重试。");
+    if (cls === "capacity") die(e.message + "\n[诊断] gemini-3.7-flash 当前无可用渠道 → 稍后重试；如用户明确同意降级，再用 --model 指定其它支持 input_audio 的 Gemini 模型。");
     if (cls === "fatal") die(e.message + fatalHint(e.message));
     die(e.message);
   }
@@ -856,34 +1192,57 @@ async function cmdAudio(cfg, args) {
 }
 // ---------- meta ----------
 async function cmdSelfTest(cfg) {
-  requireKey(cfg);
   log("baseUrl: " + cfg.baseUrl);
-  log("key: " + mask(cfg.apiKey));
+  log("API Key: " + mask(cfg.apiKey));
+  log("Access Token: " + mask(cfg.accessToken));
   try {
-    const res = await api(cfg, "GET", "/v1/models");
-    const ids = (res.data || []).map(m => m.id);
-    log("可用模型数: " + ids.length);
-    const vid = ids.filter(x => /seedance/i.test(x));
-    const img = ids.filter(x => /image/i.test(x));
-    log("视频模型: " + (vid.join(", ") || "(未见 seedance —— 确认 Key 分组包含视频模型)"));
-    log("生图模型: " + (img.join(", ") || "(未见 image 模型)"));
-    log("[OK] Key 可用。self-test 不调用付费生成接口。");
+    requireKey(cfg);
+    requireAccessToken(cfg);
+    const [account, catalog] = await Promise.all([fetchAccount(cfg), fetchVideoCatalog(cfg)]);
+    if (!catalog.apiKeyCheck.checked) die("生成 API Key 验证失败: " + catalog.apiKeyCheck.error);
+    const available = catalog.models.filter((model) => model.availability === "available");
+    log("账户余额: " + money(account.balance, account.currency));
+    log("实时视频模型: " + catalog.models.length + " 个；当前 Key 可用且端点兼容: " + available.length + " 个");
+    log("价格版本: " + catalog.pricingVersion);
+    if (cfg.videoModel) {
+      const selected = catalog.models.find((model) => model.id === cfg.videoModel);
+      log("已选视频模型: " + cfg.videoModel + (selected ? " · " + selected.availabilityLabel + " · " + priceLabel(selected.price) : " · 已不在目录"));
+    } else log("已选视频模型: (尚未选择；生成前必须让用户选择)");
+    log("[OK] 双凭据、余额、价格目录和模型状态查询均通过。self-test 不调用付费生成接口。");
     log("");
     for (const l of CAPS) log(l);
   } catch (e) { die("self-test 失败: " + e.message); }
 }
+async function cmdCaps(cfg) {
+  for (const line of CAPS) log(line);
+  if (!cfg.videoModel || !cfg.accessToken) return;
+  try {
+    const catalog = await fetchVideoCatalog(cfg);
+    const selected = catalog.models.find((model) => model.id === cfg.videoModel);
+    if (selected) {
+      log("");
+      log("当前已选模型: " + selected.id + " · " + priceLabel(selected.price) + " · " + selected.availabilityLabel);
+      log("能力: " + modelSummary(selected));
+      log("目录说明: " + selected.description);
+    }
+  } catch (error) { log("[提示] 动态能力查询失败: " + error.message); }
+}
 // ---------- main ----------
-const argv = process.argv.slice(2);
-const args = parseArgs(argv);
-const cfg = loadConfig();
-(async () => {
-  if (args["set-key"]) { cfg.apiKey = String(args["set-key"]); saveConfig({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl }); log("Key 已保存到 " + CONFIG_PATH + "（" + mask(cfg.apiKey) + "）"); return; }
-  if (args["set-base-url"]) { cfg.baseUrl = String(args["set-base-url"]).replace(/\/$/, ""); saveConfig({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl }); log("baseUrl = " + cfg.baseUrl); return; }
+async function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
+  const cfg = loadConfig();
+  if (args["set-key"]) { cfg.apiKey = String(args["set-key"]); saveConfigPatch({ apiKey: cfg.apiKey }); log("API Key 已保存到 " + CONFIG_PATH + "（" + mask(cfg.apiKey) + "）"); return; }
+  if (args["set-access-token"]) die("为避免个人访问令牌出现在命令行历史中，已禁用 --set-access-token <值>。请改用 --configure-access-token 的隐藏输入助手。");
+  if (args["configure-access-token"]) return cmdConfigureAccessToken();
+  if (args["set-video-model"]) return cmdSetVideoModel(cfg, String(args["set-video-model"]));
+  if (args["set-base-url"]) { cfg.baseUrl = String(args["set-base-url"]).replace(/\/$/, ""); saveConfigPatch({ baseUrl: cfg.baseUrl }); log("baseUrl = " + cfg.baseUrl); return; }
   if (args["config-path"]) { log(CONFIG_PATH); return; }
-  if (args["get-config"]) { log(JSON.stringify({ configPath: CONFIG_PATH, baseUrl: cfg.baseUrl, apiKey: mask(cfg.apiKey), videoModel: cfg.videoModel, imageModel: cfg.imageModel }, null, 2)); return; }
-  if (args["caps"] || args["capabilities"]) { for (const l of CAPS) log(l); return; }
+  if (args["get-config"]) { log(JSON.stringify({ configPath: CONFIG_PATH, baseUrl: cfg.baseUrl, apiKey: mask(cfg.apiKey), accessToken: mask(cfg.accessToken), userId: cfg.userId || "(auto)", videoModel: cfg.videoModel || "(not selected)", imageModel: cfg.imageModel, audioModel: AUDIO_MODEL_DEFAULT }, null, 2)); return; }
+  if (args["caps"] || args["capabilities"]) return cmdCaps(cfg);
   if (args["self-test"]) return cmdSelfTest(cfg);
   const cmd = args._[0];
+  if (cmd === "account") return cmdAccount(cfg, args);
+  if (cmd === "models") return cmdModels(cfg, args);
   if (cmd === "video") return cmdVideo(cfg, args);
   if (cmd === "image") return cmdImage(cfg, args);
   if (cmd === "status") return cmdStatus(cfg, args);
@@ -892,11 +1251,16 @@ const cfg = loadConfig();
   if (cmd === "depth") return cmdDepth(cfg, args);
   if (cmd === "audio") return cmdAudio(cfg, args);
   log(["seedance-studio CLI — 用法:",
-    '  配置:  node studio.mjs --set-key "sk-..."   |  --get-config  |  --self-test  |  --caps',
-    '  生视频: node studio.mjs video --prompt "..." [--duration 4-30] [--ratio 16:9]',
+    '  配置生成 Key: node studio.mjs --set-key "sk-..."',
+    '  安全配置访问令牌: node studio.mjs --configure-access-token（隐藏输入；不写配置文件）',
+    '  查账户: node studio.mjs account [--json]',
+    '  查视频模型: node studio.mjs models [--json] [--no-key-check]',
+    '  选择模型: node studio.mjs --set-video-model "<模型ID>"',
+    '  其它配置: node studio.mjs --get-config | --self-test | --caps',
+    '  生视频: node studio.mjs video --prompt "..." [--model 临时覆盖模型ID] [--duration 秒] [--ratio 16:9]',
     "          [--first-frame 图] [--last-frame 图]（图生视频：片头随首帧/片尾随尾帧）",
     "          [--identity-image 授权真人图] [--image 场景/产品图 ...合计最多30] [--video-url URL] [--audio-url URL]",
-    "          [--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
+    "          [--audio|--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
     '  生图:  node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model gpt-image-2-4k] [--identity-ref 授权真人图] [--ref 场景/产品图 ...] [--dry-run]',
     "          多张并发：重复 --prompt 出多张不同图，或 --n 每个提示词出几张；总量 = 提示词数 × n，用并发池并行跑（默认并发 3、上限 10）",
@@ -904,6 +1268,11 @@ const cfg = loadConfig();
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape|action] [--fps N] [--no-depth] [--out 目录]",
     "          题材自适应：character=真深度读人物动作/前后景；landscape=运动热图+原帧光色、跳深度(--with-depth 强开)；action=多人骨架(YOLO-pose)+运动+深度读武打连招(--no-pose 关骨架)；auto=都出自己挑。所有模式都出 motion_heat 读运镜",
-    "  音频拆解: node studio.mjs audio --video <片> [--audio 音频] [--start 秒 --end 秒] [--model gemini-3.6-flash] [--separate] [--out 目录] [--dry-run]",
-    "          抽音→Gemini 多模态一次拆出「人声台词(带时间戳) / BGM风格描述 / 音效时间轴」；默认 gemini-3.6-flash(思考模型、更透)，可换 gemini-2.5-flash。88api 无专用 STT 渠道故走多模态。--separate 用本地 Demucs 分人声/伴奏供核对。BGM 只描述不提取原曲(版权)"].join("\n"));
-})().catch(e => { console.error("[ERROR] " + (e && e.message ? e.message : String(e))); process.exitCode = 1; });
+    "  音频拆解: node studio.mjs audio --video <片> [--audio 音频] [--start 秒 --end 秒] [--model gemini-3.7-flash] [--separate] [--out 目录] [--dry-run]",
+    "          抽音→Gemini 多模态一次拆出「人声台词(带时间戳) / BGM风格描述 / 音效时间轴」；默认 gemini-3.7-flash。88api 无专用 STT 渠道故走多模态。--separate 用本地 Demucs 分人声/伴奏供核对。BGM 只描述不提取原曲(版权)"].join("\n"));
+}
+
+const invokedAsScript = process.argv[1] && resolve(process.argv[1]).toLowerCase() === resolve(SCRIPT_PATH).toLowerCase();
+if (invokedAsScript) main().catch(e => { console.error("[ERROR] " + (e && e.message ? e.message : String(e))); process.exitCode = 1; });
+
+export { inferVideoCapabilities, normalizeVideoPrice, isVideoCatalogRow, endpointCompatible, buildVideoPayload, fetchVideoCatalog, fetchAccount, money, priceLabel };

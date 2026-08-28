@@ -9,7 +9,7 @@
 5. Add one motivated camera plan, physical light source, sound intent, and an observable endpoint.
 6. Add only constraints that protect identity, continuity, anatomy, props, sound, or delivery.
 
-## Universal 2.5 structure
+## Universal video-prompt structure
 
 `[Reference declaration] + [one-line overview] + [storyline or timestamp progression] + [global locks]`
 
@@ -19,11 +19,11 @@ For a simple 4–15s clip, compress it to:
 
 Do not force timestamps into a single simple action. Use them when the clip has multiple phases, dialogue beats, edits, or precise event timing.
 
-## Prefer one single-pass take (≤30s)
+## Prefer one single-pass take
 
-Seedance 2.5 renders one continuous 4–30s take. For anything ≤30s, **default to a single take, not stitched segments**—one pass keeps pacing, transitions, lighting, and identity continuous, with no seam and lower cost. Only split when the clip exceeds 30s or genuinely needs a hard scene cut (then use pipeline.md).
+Read the selected model's live `minDuration` and `maxDuration` first. When the requested duration fits one call, **default to a single take, not stitched segments**—one pass keeps pacing, transitions, lighting, and identity continuous, with no seam and lower cost. Split only when the clip exceeds that model's live single-call limit or genuinely needs a hard scene cut.
 
-For an 8–30s take, write the **story arc first** (opening → progression → turning point → ending), then fill in shot/camera/light detail per beat. The arc, not a shot list, is what makes a longer single take read as one deliberate piece.
+For a longer single take, write the **story arc first** (opening → progression → turning point → ending), then fill in shot/camera/light detail per beat.
 
 ## Reference declaration
 
@@ -60,9 +60,9 @@ Translate emotion into behavior:
 
 State one of: natural ambience, specific SFX, dialogue, voice reference, music, or silence. When clean footage matters, write `全程无字幕、无背景音乐，仅保留[环境声/人声/指定音效]` and repeat it once in the global lock.
 
-### Official sound syntax (write audio directly into the prompt)
+### Seedance 2.5 sound syntax (only when that model is selected)
 
-Seedance 2.5 generates synced audio natively. Mark each sound type with its bracket so the model separates them:
+Seedance 2.5 generates synced audio natively. Do not apply this syntax to other models unless their live description or verified documentation says so.
 
 - Music → `( )`  · SFX → `< >`  · Dialogue → `{ }`  · On-screen subtitle → `【 】`
 - Example: `女孩转身微笑 {你终于来了}<关门声>（温柔的钢琴）`

@@ -74,6 +74,59 @@ test("chat-provided access token is verified, saved, masked and does not trigger
   assert.equal(saved.userId, "7");
 });
 
+test("image preflight reuses the Image2 plugin Key and keeps gpt-image-2 as the default", async (t) => {
+  const server = createServer((req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/v1/models") {
+      if (req.headers.authorization !== "Bearer shared-image2-key") {
+        res.statusCode = 401;
+        res.end(JSON.stringify({ error: { message: "invalid key" } }));
+        return;
+      }
+      res.end(JSON.stringify({ data: [{ id: "gpt-image-2" }, { id: "gpt-image-2-4k" }] }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: { message: "not found" } }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.close());
+
+  const home = mkdtempSync(join(tmpdir(), "seedance-shared-key-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const seedanceConfigDir = join(home, ".seedance-studio");
+  const codexDir = join(home, ".codex");
+  mkdirSync(seedanceConfigDir, { recursive: true });
+  mkdirSync(codexDir, { recursive: true });
+  const { port } = server.address();
+  writeFileSync(join(seedanceConfigDir, "config.json"), JSON.stringify({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "expired-seedance-key", imageModel: "gemini-3.1-flash-image" }));
+  writeFileSync(join(codexDir, "88api-image-gen-config.json"), JSON.stringify({ workers: [{ name: "default", apiKey: "shared-image2-key", enabled: true }], model: "gpt-image-2" }));
+  const cliPath = fileURLToPath(new URL("../plugins/seedance-studio/scripts/studio.mjs", import.meta.url));
+  const env = { ...process.env, USERPROFILE: home, HOME: home };
+  delete env.SEEDANCE_STUDIO_API_KEY;
+  const runCli = (args) => new Promise((resolveRun) => {
+    const child = spawn(process.execPath, [cliPath, ...args], { env, windowsHide: true });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("close", (code) => resolveRun({ code, stdout, stderr }));
+  });
+
+  const preflightRun = await runCli(["preflight", "--scope", "image", "--json"]);
+  assert.equal(preflightRun.code, 0, preflightRun.stderr);
+  const preflight = JSON.parse(preflightRun.stdout);
+  assert.equal(preflight.ready, true);
+  assert.equal(preflight.apiKey.configured, true);
+  assert.match(preflight.apiKey.source, /88api-image-gen-config\.json$/);
+  assert.equal(preflight.image.model, "gpt-image-2");
+
+  const dryRun = await runCli(["image", "--prompt", "product", "--dry-run", "--out", join(home, "out")]);
+  assert.equal(dryRun.code, 0, dryRun.stderr);
+  assert.match(dryRun.stdout, /模型 gpt-image-2/);
+  assert.doesNotMatch(dryRun.stdout, /gemini/i);
+});
+
 test("parses Seedance catalog capabilities and limits", () => {
   const capabilities = inferVideoCapabilities({
     model_name: "Seedance-2.5-720p官方版",

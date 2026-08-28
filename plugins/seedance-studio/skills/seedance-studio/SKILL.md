@@ -1,6 +1,6 @@
 ---
 name: seedance-studio
-description: 三大工作流的一站式 88API 短片工作室：实时获取当前视频模型、价格、能力与账户/API Key 可用状态，让用户明确选择模型后再生成；默认用 gemini-3.7-flash 拆解视频音频，并用 gpt-image-2 / gpt-image-2-4k 生成关键帧。专注单条短片与 TVC/广告片，不做多集连续剧：①一个想法 → 完整成片，按所选模型单段上限自动分级；②视频 → 证据优先反推提示词；③视频 → 可复刻工程包。用户提到出片、生视频、做短片、TVC、广告片、宣传片、视频模型选择、模型价格、账户余额、分镜、图生视频、反推提示词、复刻视频、仿拍、素材包、Seedance、可灵、Wan、Grok 视频或“把这个想法做成视频”时使用。不用于纯图片任务。
+description: 三大工作流的一站式 88API 短片工作室：实时获取视频模型、价格、能力与账户/API Key 状态，让用户选模型后生成；默认用 gemini-3.7-flash 拆解视频音频，用 gpt-image-2 生成产品图、角色图、关键帧和锚定图，只有用户明确要求4K才用 gpt-image-2-4k。用于：①想法→完整成片；②视频→证据优先反推；③视频→可复刻工程包；以及用户明确调用本插件生成产品图、视频素材图或关键帧。触发词包括出片、生视频、短片、TVC、广告、分镜、产品图、角色设定图、图生视频、反推、复刻、Seedance、可灵、Wan、Grok。只有用户明确指定Nano Banana或Gemini生图时才转交Gemini图片插件。
 ---
 
 # Seedance Studio
@@ -17,7 +17,7 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" <参数>
 
 ## 首次使用：主动介绍、双凭据与模型选择
 
-1. 每次触发先运行 `--get-config`。若 `onboardingShown=false`，在处理用户原需求前**主动做一次简短介绍**：
+1. 每次触发先运行与任务对应的程序级预检：图片任务用 `preflight --scope image --json`，视频任务用 `preflight --scope video --json`，账户/目录任务用 `preflight --scope account --json`。**没有当前任务中的真实 preflight 结果，禁止声称“缺少Key”或要求用户重新配置。** 若 `onboardingShown=false`，在处理用户原需求前主动做一次简短介绍：
    - 想法 → 单条短片/TVC：整理需求、分镜、提示词、生成、下载与交付；
    - 参考视频 → 提示词反推：分析画面、运镜、动作、台词、BGM 和音效；
    - 参考视频 → 可复刻工程包：整理分镜、素材职责与缺失素材，可替换产品或授权人物；
@@ -26,10 +26,14 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" <参数>
 2. 插件使用两种不同凭据：
    - **API Key**：调用 `/v1/*` 生成端点；在 88API“API 密钥”创建，建议选择 `auto` 分组。
    - **个人访问令牌**：只读调用 `/api/user/self`、`/api/pricing`、`/api/status`、`/api/user/models`，用于余额、实时价格和可用状态；在“个人资料 → 安全”创建。它不是 API Key。
-3. 任一凭据缺失时停止付费请求，**优先让用户在当前可信聊天中直接交给 Agent 配置**：`请登录 https://88api.ai/：在“API 密钥”创建 auto 分组 API Key，再到“个人资料 → 安全”创建个人访问令牌。把两项完整值直接发给我，我会一键保存、脱敏验证并继续刚才的任务。`
+3. 只根据 preflight 的结构化结果询问缺失项：
+   - 图片任务只需要 API Key；`apiKey.configured=true` 且 `apiKey.valid=true` 时直接生成，不得索要访问令牌或再次询问Key。
+   - 视频模型目录和正式出片需要 API Key 与个人访问令牌；只询问 preflight 明确缺失或验证失败的那一项。
+   - CLI 会依次复用 Seedance 自身配置、`88api-image-gen` 的 Image2 Key、`88api-nano-banana` 的 Key；任一来源有效就不得重复询问。
+   需要配置时优先让用户在当前可信聊天中直接交给 Agent，一键保存、脱敏验证并继续刚才的任务。
 4. 收到后立即执行 `--set-key "<API_KEY>"` 与 `--set-access-token "<ACCESS_TOKEN>"`。不得在回复、进度或错误里复述完整值；只报告脱敏状态、验证结果和配置路径。**不要因为凭据出现在当前可信会话中就要求用户撤销、重新创建或改用隐藏输入；验证通过后直接继续。** 只有接口明确返回无效、过期或无权限时，才要求更换对应凭据。
 5. 用户不愿在聊天中发送个人访问令牌时，保留 `--configure-access-token` 隐藏输入作为备用。Windows 助手验证 `/api/user/self` 后写入专用用户环境变量并自动识别用户 ID；不得要求用户另外寻找用户 ID。
-6. 运行 `account`、`models --json` 和 `--self-test`。这些都是只读检查，不产生生成费用。向用户展示当前余额，以及所有视频模型的模型 ID、按秒/次价格、能力摘要、端点兼容性、账户可见性与当前 API Key 可用状态。
+6. `preflight`、`account`、`models --json` 和 `--self-test` 都是只读检查，不产生生成费用。向用户展示当前余额，以及所有视频模型的模型 ID、按秒/次价格、能力摘要、端点兼容性、账户可见性与当前 API Key 可用状态。
 7. **模型必须由用户明确选择，Agent 不得按价格或主观质量替用户决定。** 用户选定后执行 `--set-video-model "<精确模型ID>"`；每次付费生成前仍刷新目录并复核价格和状态。用户明确给出模型 ID 时，可用 `video --model "<模型ID>"` 临时覆盖。
 8. 配置与选择成功后自动继续用户原任务，不要让用户重新描述需求。
 
@@ -57,6 +61,18 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" <参数>
 - 授权真人分支禁止“原照片 → AI 锚定图 → 再以 AI 锚定图生其它脸图”的身份链。每张含脸关键帧都直接参考原照片；可额外参考上一帧保持场景，但上一帧不能成为身份唯一来源。
 - 视频提交前先 `--dry-run`，必须看到 `[IDENTITY-AUDIT]` 的 `mode:"authorized-direct"` 且 `sources` 含原照片；缺失则停止，不得付费生成。
 
+## 图片生成路由（强制）
+
+- 用户明确调用 88API-Seedance-Studio 生成产品图、角色图、场景图、关键帧或锚定图时，使用本插件的 `image` 子命令，不得自动转去 Nano Banana。
+- 默认模型固定为 `gpt-image-2`；普通生图不要传 `--model`，CLI 会使用该默认值。
+- 只有用户明确要求“4K”或点名 `gpt-image-2-4k` 时，才为本次调用传 `--model gpt-image-2-4k`。
+- 只有用户明确点名 Nano Banana、Gemini 或其具体图片模型时，才转交 Gemini 图片插件。不得因为“产品图、复杂、高质量、多参考”自行改用 Gemini。
+- 开始前运行 `preflight --scope image --json`。只要结果 `ready=true`，直接继续生图；不得再次询问 Key。
+
+```powershell
+node "<PLUGIN_ROOT>/scripts/studio.mjs" image --prompt "<产品图提示词>" --n 4 --aspect 16:9 --out "<project>/assets"
+```
+
 ## 意图分级（启动前先判断规模，自动分级，别审问用户）
 
 从用户一句话里**自动判断规模**，多数直接开工，只有多镜短片开拍前做 1 次轻确认——这是本插件"一句话出片"的底线：
@@ -72,6 +88,7 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" <参数>
 
 | 用户意图 | 工作流 | 加载 |
 |---|---|---|
+| 明确调用本插件生成产品图/角色图/关键帧 | `preflight --scope image` → `image`，默认 `gpt-image-2` | 上方“图片生成路由” |
 | 功能一（T0）：想法 → 成片（不超过所选模型单段上限） | 下方“快速出片” | [references/prompting.md](references/prompting.md) |
 | 功能一（T1）：想法 → 完整成片（超过单段上限 / 多场景） | 完整成片管线 | [references/pipeline.md](references/pipeline.md)、[references/long-video.md](references/long-video.md) |
 | 图生视频 / 多模态参考 | 快速出片 + `--image` | [references/references.md](references/references.md) |

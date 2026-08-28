@@ -14,6 +14,8 @@ const SCRIPT_DIR = dirname(SCRIPT_PATH);
 
 const CONFIG_DIR = join(homedir(), ".seedance-studio");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+const IMAGE2_CONFIG_PATH = join(homedir(), ".codex", "88api-image-gen-config.json");
+const NANO_CONFIG_PATH = join(homedir(), ".codex", "88api-nano-banana-config.json");
 const DEFAULTS = {
   baseUrl: "https://88api.ai",
   videoModel: "",
@@ -160,6 +162,28 @@ function readStoredConfig() {
   try { return JSON.parse(readFileSync(CONFIG_PATH, "utf8")); }
   catch { return {}; }
 }
+function readJsonConfig(path) {
+  if (!existsSync(path)) return {};
+  try { return JSON.parse(readFileSync(path, "utf8")); }
+  catch { return {}; }
+}
+function resolveApiKeyCandidates(stored) {
+  const candidates = [];
+  const add = (value, source) => {
+    if (!value) return;
+    const text = String(value);
+    if (!candidates.some((candidate) => candidate.value === text)) candidates.push({ value: text, source });
+  };
+  const envKey = firstEnv(ENV.apiKey);
+  add(envKey, "SEEDANCE_STUDIO_API_KEY");
+  add(stored.apiKey, CONFIG_PATH);
+  const image2 = readJsonConfig(IMAGE2_CONFIG_PATH);
+  const image2Worker = Array.isArray(image2.workers) ? image2.workers.find((worker) => worker && worker.apiKey && worker.enabled !== false) : null;
+  if (image2Worker) add(image2Worker.apiKey, IMAGE2_CONFIG_PATH);
+  const nano = readJsonConfig(NANO_CONFIG_PATH);
+  add(nano.apiKey, NANO_CONFIG_PATH);
+  return candidates;
+}
 function firstEnv(names) {
   for (const name of names) {
     const value = process.env[name];
@@ -175,10 +199,14 @@ function firstEnv(names) {
 }
 function loadConfig() {
   const stored = readStoredConfig();
+  const apiKeyCandidates = resolveApiKeyCandidates(stored);
+  const apiKeyConfig = apiKeyCandidates[0] || { value: "", source: "(not configured)" };
   return {
     ...DEFAULTS,
     ...stored,
-    apiKey: firstEnv(ENV.apiKey) || stored.apiKey || "",
+    apiKey: apiKeyConfig.value,
+    apiKeySource: apiKeyConfig.source,
+    apiKeyCandidates,
     accessToken: stored.accessToken || firstEnv(ENV.accessToken) || "",
     userId: stored.userId || firstEnv(ENV.userId) || "",
   };
@@ -434,6 +462,23 @@ async function fetchGenerationModelIds(cfg) {
     return { ids: null, error: error.message };
   }
 }
+async function selectWorkingApiKey(cfg) {
+  const candidates = Array.isArray(cfg.apiKeyCandidates) && cfg.apiKeyCandidates.length
+    ? cfg.apiKeyCandidates
+    : (cfg.apiKey ? [{ value: cfg.apiKey, source: cfg.apiKeySource || "(configured)" }] : []);
+  let lastError = "API Key 未配置";
+  for (const candidate of candidates) {
+    const probe = { ...cfg, apiKey: candidate.value };
+    const result = await fetchGenerationModelIds(probe);
+    if (result.ids) {
+      cfg.apiKey = candidate.value;
+      cfg.apiKeySource = candidate.source;
+      return { ...result, source: candidate.source };
+    }
+    lastError = result.error || lastError;
+  }
+  return { ids: null, error: lastError, source: candidates[0]?.source || "(not configured)" };
+}
 async function fetchVideoCatalog(cfg, options = {}) {
   const [pricing, status, visibleResponse] = await Promise.all([
     dashboardApi(cfg, "GET", "/api/pricing"),
@@ -441,7 +486,7 @@ async function fetchVideoCatalog(cfg, options = {}) {
     dashboardApi(cfg, "GET", "/api/user/models"),
   ]);
   const visible = new Set(listOf(visibleResponse.data));
-  const keyResult = options.checkApiKey === false ? { ids: null, error: "未检查 API Key" } : await fetchGenerationModelIds(cfg);
+  const keyResult = options.checkApiKey === false ? { ids: null, error: "未检查 API Key" } : await selectWorkingApiKey(cfg);
   const vendors = new Map();
   for (const vendor of (pricing.vendors || [])) vendors.set(String(vendor.id), vendor);
   const models = (pricing.data || []).filter(isVideoCatalogRow).map((row) => {
@@ -539,6 +584,98 @@ async function fetchAccount(cfg) {
     used: finiteNumber(user.used_quota, 0) / quotaPerUnit,
     requestCount: finiteNumber(user.request_count, 0),
   };
+}
+async function runPreflight(cfg, scope = "all") {
+  const normalizedScope = String(scope || "all").toLowerCase();
+  if (!["all", "image", "video", "account"].includes(normalizedScope)) die("preflight scope 仅支持: all, image, video, account");
+  const report = {
+    scope: normalizedScope,
+    configPath: CONFIG_PATH,
+    configExists: existsSync(CONFIG_PATH),
+    apiKey: {
+      configured: Boolean(cfg.apiKey),
+      source: cfg.apiKeySource || "(unknown)",
+      masked: mask(cfg.apiKey),
+      valid: null,
+      error: "",
+    },
+    accessToken: {
+      configured: Boolean(cfg.accessToken),
+      masked: mask(cfg.accessToken),
+      valid: null,
+      error: "",
+    },
+    image: null,
+    video: null,
+    ready: false,
+  };
+
+  let keyResult = { ids: null, error: "API Key 未配置" };
+  if (cfg.apiKey && normalizedScope !== "account") {
+    keyResult = await selectWorkingApiKey(cfg);
+    report.apiKey.source = cfg.apiKeySource || keyResult.source || report.apiKey.source;
+    report.apiKey.masked = mask(cfg.apiKey);
+    report.apiKey.valid = Boolean(keyResult.ids);
+    report.apiKey.error = keyResult.error;
+    if (keyResult.ids) report.apiKey.modelCount = keyResult.ids.size;
+  } else if (!cfg.apiKey) report.apiKey.valid = false;
+
+  if (normalizedScope === "image" || normalizedScope === "all") {
+    const imageModel = IMG_MODELS[cfg.imageModel] ? cfg.imageModel : DEFAULTS.imageModel;
+    const visible = keyResult.ids ? keyResult.ids.has(imageModel) : null;
+    report.image = {
+      model: imageModel,
+      endpoint: "/v1/images/generations",
+      apiKeyVisible: visible,
+      ready: report.apiKey.valid === true && visible !== false,
+    };
+  }
+
+  if (normalizedScope === "video" || normalizedScope === "account" || normalizedScope === "all") {
+    if (cfg.accessToken) {
+      try {
+        const account = await fetchAccount(cfg);
+        report.accessToken.valid = true;
+        report.account = { status: account.status, balance: account.balance, currency: account.currency };
+      } catch (error) {
+        report.accessToken.valid = false;
+        report.accessToken.error = error.message;
+      }
+    } else report.accessToken.valid = false;
+  }
+
+  if (normalizedScope === "video" || normalizedScope === "all") {
+    if (report.apiKey.valid === true && report.accessToken.valid === true) {
+      try {
+        const catalog = await fetchVideoCatalog(cfg);
+        const selected = cfg.videoModel ? catalog.models.find((model) => model.id === cfg.videoModel || model.catalogId === cfg.videoModel) : null;
+        report.video = {
+          pricingVersion: catalog.pricingVersion,
+          availableModels: catalog.models.filter((model) => model.availability === "available").length,
+          selectedModel: selected ? selected.id : null,
+          selectedReady: selected ? selected.availability === "available" : false,
+        };
+      } catch (error) {
+        report.video = { error: error.message, selectedModel: cfg.videoModel || null, selectedReady: false };
+      }
+    } else report.video = { error: "API Key 或个人访问令牌未通过验证", selectedModel: cfg.videoModel || null, selectedReady: false };
+  }
+
+  if (normalizedScope === "image") report.ready = Boolean(report.image && report.image.ready);
+  else if (normalizedScope === "account") report.ready = report.accessToken.valid === true;
+  else if (normalizedScope === "video") report.ready = Boolean(report.video && report.video.selectedReady);
+  else report.ready = Boolean(report.image && report.image.ready && report.video && report.video.availableModels > 0 && report.accessToken.valid === true);
+  return report;
+}
+async function cmdPreflight(cfg, args) {
+  const report = await runPreflight(cfg, args.scope || "all");
+  if (args.json) { log(JSON.stringify(report, null, 2)); return report; }
+  log("preflight scope=" + report.scope + " ready=" + report.ready);
+  log("API Key: " + report.apiKey.masked + " · source=" + report.apiKey.source + " · valid=" + report.apiKey.valid);
+  if (report.image) log("生图: " + report.image.model + " · " + report.image.endpoint + " · ready=" + report.image.ready);
+  if (report.video) log("视频: selected=" + (report.video.selectedModel || "(not selected)") + " · ready=" + report.video.selectedReady);
+  if (report.accessToken.configured) log("访问令牌: " + report.accessToken.masked + " · valid=" + report.accessToken.valid);
+  return report;
 }
 async function cmdAccount(cfg, args) {
   const account = await fetchAccount(cfg);
@@ -908,7 +1045,16 @@ async function cmdImage(cfg, args) {
   const rawPrompts = asArray(args.prompt).map(String).map((s) => s.trim()).filter(Boolean);
   if (!rawPrompts.length) die("需要 --prompt（可重复 --prompt 出多张不同图，并发跑）");
   const aspect = String(args.aspect || "16:9");
-  const primary = resolveImgModel(args.model);
+  const configuredImageModel = IMG_MODELS[cfg.imageModel] ? cfg.imageModel : DEFAULTS.imageModel;
+  const primary = resolveImgModel(args.model || configuredImageModel);
+  if (!args["dry-run"]) {
+    cfg.imageModel = primary.id;
+    const preflight = await runPreflight(cfg, "image");
+    if (!preflight.ready) {
+      const reason = preflight.apiKey.error || (preflight.image && preflight.image.apiKeyVisible === false ? "当前API Key不可见模型 " + primary.id : "API Key未配置或未通过验证");
+      die("生图预检失败: " + reason + "。未提交付费请求。");
+    }
+  }
   if (!imgAspectOk(primary.id, aspect)) {
     die("aspect 对 " + primary.id + " 仅支持: " + Object.keys(IMG_ASPECTS).join(", "));
   }
@@ -1338,11 +1484,12 @@ async function main(argv = process.argv.slice(2)) {
   if (args["set-video-model"]) return cmdSetVideoModel(cfg, String(args["set-video-model"]));
   if (args["set-base-url"]) { cfg.baseUrl = String(args["set-base-url"]).replace(/\/$/, ""); saveConfigPatch({ baseUrl: cfg.baseUrl }); log("baseUrl = " + cfg.baseUrl); return; }
   if (args["config-path"]) { log(CONFIG_PATH); return; }
-  if (args["get-config"]) { log(JSON.stringify({ configPath: CONFIG_PATH, baseUrl: cfg.baseUrl, apiKey: mask(cfg.apiKey), accessToken: mask(cfg.accessToken), userId: cfg.userId || "(auto)", videoModel: cfg.videoModel || "(not selected)", imageModel: cfg.imageModel, audioModel: AUDIO_MODEL_DEFAULT, onboardingShown: Boolean(cfg.onboardingShown) }, null, 2)); return; }
+  if (args["get-config"]) { log(JSON.stringify({ configPath: CONFIG_PATH, baseUrl: cfg.baseUrl, apiKey: mask(cfg.apiKey), apiKeySource: cfg.apiKeySource, accessToken: mask(cfg.accessToken), userId: cfg.userId || "(auto)", videoModel: cfg.videoModel || "(not selected)", imageModel: IMG_MODELS[cfg.imageModel] ? cfg.imageModel : DEFAULTS.imageModel, audioModel: AUDIO_MODEL_DEFAULT, onboardingShown: Boolean(cfg.onboardingShown) }, null, 2)); return; }
   if (args["caps"] || args["capabilities"]) return cmdCaps(cfg);
   if (args["self-test"]) return cmdSelfTest(cfg);
   const cmd = args._[0];
   if (cmd === "intro") return cmdIntro();
+  if (cmd === "preflight") return cmdPreflight(cfg, args);
   if (cmd === "account") return cmdAccount(cfg, args);
   if (cmd === "models") return cmdModels(cfg, args);
   if (cmd === "video") return cmdVideo(cfg, args);
@@ -1357,6 +1504,7 @@ async function main(argv = process.argv.slice(2)) {
     '  聊天配置访问令牌: node studio.mjs --set-access-token "<令牌>"（优先；自动验证并脱敏保存）',
     '  隐藏输入访问令牌: node studio.mjs --configure-access-token（备用；不写配置文件）',
     '  首次介绍: node studio.mjs intro | --mark-onboarding-shown',
+    '  强制预检: node studio.mjs preflight --scope image|video|account|all [--json]',
     '  查账户: node studio.mjs account [--json]',
     '  查视频模型: node studio.mjs models [--json] [--no-key-check]',
     '  选择模型: node studio.mjs --set-video-model "<模型ID>"',

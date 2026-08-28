@@ -24,6 +24,17 @@ API Key 与个人访问令牌不得混用：
 
 访问令牌请求使用 `Authorization: Bearer <access-token>`；`New-Api-User` 可选，插件先调用 `/api/user/self` 自动识别用户 ID。推荐用户在受信任的 Codex 私人任务中把令牌直接交给 Agent，由 Agent 执行 `--set-access-token`、保存到权限受限的 `config.json` 并脱敏验证；验证通过后不得要求用户撤销或重新创建。用户不愿通过聊天提供时，Windows 可用 `--configure-access-token` 隐藏输入并保存到 `SEEDANCE_STUDIO_ACCESS_TOKEN` 用户环境变量；插件也兼容既有的 `RELAY_88API_ACCESS_TOKEN`。生产环境已验证 `/api/pricing` 需要访问令牌，不能依赖匿名访问；`/api/ratio_config` 当前未启用。
 
+### 强制预检与Key复用
+
+Agent在声称凭据缺失前必须运行：
+
+```powershell
+node studio.mjs preflight --scope image --json
+node studio.mjs preflight --scope video --json
+```
+
+API Key读取优先级：`SEEDANCE_STUDIO_API_KEY` → `~/.seedance-studio/config.json` → `~/.codex/88api-image-gen-config.json` → `~/.codex/88api-nano-banana-config.json`。预检只输出来源、脱敏值和有效性。图片任务只需要API Key；个人访问令牌仅用于账户、价格和视频目录查询。
+
 | 接口 | 用途 | 关键字段 |
 |---|---|---|
 | `GET /api/status` | 计价单位与配额换算 | `quota_per_unit`、`quota_display_type` |

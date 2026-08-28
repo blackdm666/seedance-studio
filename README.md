@@ -39,6 +39,10 @@
 - 🧵 拼接：`concat` 命令流复制拼段（异常时 `--reencode`）
 - 🛡 成本安全：dry-run、防重复提交闸、failed 任务 NO-RETRY、拆段方案先确认总计费秒数
 
+图片生成默认固定使用 `gpt-image-2`。只有用户明确要求4K才使用 `gpt-image-2-4k`；只有明确点名 Nano Banana/Gemini 时才转到 Gemini 图片插件。
+
+插件在询问凭据前会运行程序级 `preflight`。它能识别 Seedance 自身配置，也会复用本机 `88api-image-gen` 或 `88api-nano-banana` 已保存的88API Key；预检显示有效时不会重复索要。
+
 ## 环境要求
 
 - Codex 插件功能 + Node.js 18+
@@ -84,6 +88,7 @@ node plugins/seedance-studio/scripts/studio.mjs --set-key "<YOUR_88API_KEY>"
 node plugins/seedance-studio/scripts/studio.mjs --set-access-token "<YOUR_88API_ACCESS_TOKEN>"
 node plugins/seedance-studio/scripts/studio.mjs --configure-access-token
 node plugins/seedance-studio/scripts/studio.mjs intro
+node plugins/seedance-studio/scripts/studio.mjs preflight --scope image --json
 node plugins/seedance-studio/scripts/studio.mjs account
 node plugins/seedance-studio/scripts/studio.mjs models
 node plugins/seedance-studio/scripts/studio.mjs --set-video-model "<EXACT_MODEL_ID>"

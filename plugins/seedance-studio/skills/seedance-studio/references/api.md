@@ -47,11 +47,11 @@ API Key 与个人访问令牌不得混用：
 
 | 价格目录名称 | 88API提交模型名 | 创建/状态端点 | 关键参数 |
 |---|---|---|---|
-| `veo-3.1` | `veo-3.1-1080p-8s` | `POST /v1/videos` · `GET /v1/videos/{id}` | 固定 `duration:8`；横屏 `size:1920x1080`、竖屏 `1080x1920`；图片最多2张 |
-| `veo-3.1-fast` | `veo-3.1-fast-1080p-8s` | 同上 | 同上 |
+| `veo-3.1` | `veo-3.1` | `POST /v1/videos` · `GET /v1/videos/{id}` | 固定 `duration:8`；横屏 `size:1920x1080`、竖屏 `1080x1920`；图片最多2张 |
+| `veo-3.1-fast` | `veo-3.1-fast` | 同上 | 同上 |
 | 目录声明 `openai-video` / `video-generation` 的其它模型 | 目录精确模型名 | `POST /v1/videos` · `GET /v1/videos/{id}` | 按目录实时能力构造 |
 
-当前 MiniMax H3 的 88API 模型名是 `minimax-h3-1440p` 与 `minimax-h3-768p`；旧名 `minimax-h3` 不再作为可选或提交模型。Veo 的目录短名只用于关联价格，绝不能直接作为付费提交的 `model`。
+当前 MiniMax H3 的 88API 模型名是 `minimax-h3-1440p` 与 `minimax-h3-768p`；旧名 `minimax-h3` 不再作为可选或提交模型。Veo 必须使用 `/api/pricing`、`/api/user/models` 与 `/v1/models` 可见的现网公开名 `veo-3.1` / `veo-3.1-fast`；不得使用未上线的文档名称或渠道内部 `*-generate-preview` 名称。
 
 ## 生图模型（关键帧 / 锚定图，gpt-image 家族，2026-08 实测）
 

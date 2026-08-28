@@ -40,7 +40,7 @@ const VIDEO_MODEL_ADAPTERS = Object.freeze({
   "veo-3.1": Object.freeze({
     ...DEFAULT_VIDEO_ADAPTER,
     name: "88api-veo-3.1",
-    apiModelId: "veo-3.1-1080p-8s",
+    apiModelId: "veo-3.1",
     payloadKind: "veo",
     capabilities: Object.freeze({
       textToVideo: true, imageReference: true, videoReference: false, audioReference: false,
@@ -52,7 +52,7 @@ const VIDEO_MODEL_ADAPTERS = Object.freeze({
   "veo-3.1-fast": Object.freeze({
     ...DEFAULT_VIDEO_ADAPTER,
     name: "88api-veo-3.1-fast",
-    apiModelId: "veo-3.1-fast-1080p-8s",
+    apiModelId: "veo-3.1-fast",
     payloadKind: "veo",
     capabilities: Object.freeze({
       textToVideo: true, imageReference: true, videoReference: false, audioReference: false,
@@ -133,7 +133,7 @@ function imgExt(buf) {
 const MIME = { ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".webp":"image/webp", ".gif":"image/gif" };
 const CAPS = [
   "视频生成：从 88API /api/pricing 动态获取当前视频模型、价格、能力说明和端点兼容性。",
-  "  • 按模型适配88API规范：目录别名只用于价格匹配，提交使用官方模型名、端点和参数结构。",
+  "  • 按模型适配88API规范：提交使用现网公开模型名，以及该模型对应的端点和参数结构。",
   "  • 不再内置固定 Seedance 模型；首次生成前必须由用户明确选择模型。",
   "  • `models` 合并账户可见模型与生成 API Key 的 /v1/models 结果，分开标注目录、账户和 Key 状态。",
   "  • 时长、画幅、分辨率、参考图/视频/音频和首尾帧能力以当前模型目录为准，生成前重新校验。",

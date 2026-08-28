@@ -142,9 +142,9 @@ test("filters video rows and accepts only /v1/videos-compatible endpoint types",
   assert.equal(endpointCompatible({ supported_endpoint_types: ["openai"] }), false);
 });
 
-test("maps 88API Veo price aliases to documented model names and payload schema", () => {
+test("keeps live 88API Veo model names while applying the Veo payload schema", () => {
   const adapter = explicitVideoAdapter("veo-3.1-fast");
-  assert.equal(adapter.apiModelId, "veo-3.1-fast-1080p-8s");
+  assert.equal(adapter.apiModelId, "veo-3.1-fast");
   assert.equal(endpointCompatible({ model_name: "veo-3.1-fast", supported_endpoint_types: ["openai", "gemini"] }), true);
   const model = {
     id: adapter.apiModelId,
@@ -153,7 +153,7 @@ test("maps 88API Veo price aliases to documented model names and payload schema"
   };
   const payload = buildVideoPayload({}, { prompt: "test", ratio: "9:16" }, model);
   assert.deepEqual(payload, {
-    model: "veo-3.1-fast-1080p-8s",
+    model: "veo-3.1-fast",
     prompt: "test",
     duration: 8,
     size: "1080x1920",
@@ -211,7 +211,7 @@ test("merges pricing, account visibility, API-key visibility and balance from re
         { model_name: "veo-3.1", description: "Veo 3.1 视频模型", vendor_id: 1, quota_type: 1, model_price: 0.25, billing_mode: "per_second", enable_groups: ["视频模型"], supported_endpoint_types: ["openai", "gemini"] },
       ],
     },
-    "/v1/models": { data: [{ id: "video-good" }, { id: "video-chat-only" }, { id: "veo-3.1-1080p-8s" }] },
+    "/v1/models": { data: [{ id: "video-good" }, { id: "video-chat-only" }, { id: "veo-3.1" }] },
   };
   const server = createServer((req, res) => {
     res.setHeader("Content-Type", "application/json");
@@ -228,7 +228,7 @@ test("merges pricing, account visibility, API-key visibility and balance from re
   assert.equal(catalog.models.find((model) => model.id === "video-good").availability, "available");
   assert.equal(catalog.models.find((model) => model.id === "video-good").selectable, true);
   assert.equal(catalog.models.find((model) => model.id === "video-chat-only").availability, "unsupported_endpoint");
-  const veo = catalog.models.find((model) => model.id === "veo-3.1-1080p-8s");
+  const veo = catalog.models.find((model) => model.id === "veo-3.1");
   assert.equal(veo.catalogId, "veo-3.1");
   assert.equal(veo.availability, "available");
   assert.equal(veo.adapter.payloadKind, "veo");

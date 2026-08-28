@@ -1,6 +1,6 @@
 {
   "name": "seedance-studio",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "88API 动态视频短片工作室：实时查询账户余额、视频模型价格、能力和可用状态，由用户选择模型后生成短片/TVC，并支持视频反推与复刻工程包。",
   "homepage": "https://88api.ai/",
   "author": {

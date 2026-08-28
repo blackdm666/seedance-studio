@@ -41,6 +41,18 @@ API Key 与个人访问令牌不得混用：
 
 `billing_mode=per_second` 时，实际单价 = `model_price × 自动分组倍率`，单位取 `/api/status` 的展示币种；提交前记录 `pricing_version` 和获取时间。该可用状态不是上游容量健康保证，临时熔断仍可能发生。
 
+## 视频模型适配器
+
+插件不把所有模型强行套进同一种请求体。流程是：价格目录模型名 → 模型适配器 → 88API提交模型名、创建端点、状态端点和请求参数。没有专用适配器时，只有目录声明 `openai-video` / `video-generation` 才使用统一 `/v1/videos` 请求体。
+
+| 价格目录名称 | 88API提交模型名 | 创建/状态端点 | 关键参数 |
+|---|---|---|---|
+| `veo-3.1` | `veo-3.1-1080p-8s` | `POST /v1/videos` · `GET /v1/videos/{id}` | 固定 `duration:8`；横屏 `size:1920x1080`、竖屏 `1080x1920`；图片最多2张 |
+| `veo-3.1-fast` | `veo-3.1-fast-1080p-8s` | 同上 | 同上 |
+| 目录声明 `openai-video` / `video-generation` 的其它模型 | 目录精确模型名 | `POST /v1/videos` · `GET /v1/videos/{id}` | 按目录实时能力构造 |
+
+当前 MiniMax H3 的 88API 模型名是 `minimax-h3-1440p` 与 `minimax-h3-768p`；旧名 `minimax-h3` 不再作为可选或提交模型。Veo 的目录短名只用于关联价格，绝不能直接作为付费提交的 `model`。
+
 ## 生图模型（关键帧 / 锚定图，gpt-image 家族，2026-08 实测）
 
 | 别名 | 模型 id | 端点/返回 | 输出实测 | 用途 |

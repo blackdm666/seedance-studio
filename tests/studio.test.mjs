@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   ONBOARDING_LINES,
+  explicitVideoAdapter,
   inferVideoCapabilities,
   normalizeVideoPrice,
   isVideoCatalogRow,
@@ -141,6 +142,26 @@ test("filters video rows and accepts only /v1/videos-compatible endpoint types",
   assert.equal(endpointCompatible({ supported_endpoint_types: ["openai"] }), false);
 });
 
+test("maps 88API Veo price aliases to documented model names and payload schema", () => {
+  const adapter = explicitVideoAdapter("veo-3.1-fast");
+  assert.equal(adapter.apiModelId, "veo-3.1-fast-1080p-8s");
+  assert.equal(endpointCompatible({ model_name: "veo-3.1-fast", supported_endpoint_types: ["openai", "gemini"] }), true);
+  const model = {
+    id: adapter.apiModelId,
+    adapter,
+    capabilities: adapter.capabilities,
+  };
+  const payload = buildVideoPayload({}, { prompt: "test", ratio: "9:16" }, model);
+  assert.deepEqual(payload, {
+    model: "veo-3.1-fast-1080p-8s",
+    prompt: "test",
+    duration: 8,
+    size: "1080x1920",
+  });
+  assert.throws(() => buildVideoPayload({}, { prompt: "test", duration: "10", ratio: "16:9" }, model), /最长时长为 8 秒/);
+  assert.throws(() => buildVideoPayload({}, { prompt: "test", "first-frame": "frame.png" }, model), /明确不支持首尾帧/);
+});
+
 test("builds a payload from the user-selected model profile", () => {
   const model = {
     id: "wan3.0-video-prime-1080p",
@@ -177,7 +198,7 @@ test("merges pricing, account visibility, API-key visibility and balance from re
   const responses = {
     "/api/status": { success: true, data: { quota_per_unit: 500000, quota_display_type: "CNY" } },
     "/api/user/self": { success: true, data: { id: 7, username: "demo", group: "default", status: 1, quota: 2500000, used_quota: 500000, request_count: 3 } },
-    "/api/user/models": { success: true, data: ["video-good", "video-chat-only"] },
+    "/api/user/models": { success: true, data: ["video-good", "video-chat-only", "veo-3.1"] },
     "/api/pricing": {
       success: true,
       pricing_version: "fixture-v1",
@@ -187,9 +208,10 @@ test("merges pricing, account visibility, API-key visibility and balance from re
       data: [
         { model_name: "video-good", description: "支持文生视频，时长 4–10 秒，默认 5 秒。", vendor_id: 1, quota_type: 1, model_price: 0.2, billing_mode: "per_second", enable_groups: ["视频模型"], supported_endpoint_types: ["openai-video"] },
         { model_name: "video-chat-only", description: "视频模型", vendor_id: 1, quota_type: 1, model_price: 0.1, billing_mode: "per_second", enable_groups: ["视频模型"], supported_endpoint_types: ["openai"] },
+        { model_name: "veo-3.1", description: "Veo 3.1 视频模型", vendor_id: 1, quota_type: 1, model_price: 0.25, billing_mode: "per_second", enable_groups: ["视频模型"], supported_endpoint_types: ["openai", "gemini"] },
       ],
     },
-    "/v1/models": { data: [{ id: "video-good" }, { id: "video-chat-only" }] },
+    "/v1/models": { data: [{ id: "video-good" }, { id: "video-chat-only" }, { id: "veo-3.1-1080p-8s" }] },
   };
   const server = createServer((req, res) => {
     res.setHeader("Content-Type", "application/json");
@@ -206,6 +228,10 @@ test("merges pricing, account visibility, API-key visibility and balance from re
   assert.equal(catalog.models.find((model) => model.id === "video-good").availability, "available");
   assert.equal(catalog.models.find((model) => model.id === "video-good").selectable, true);
   assert.equal(catalog.models.find((model) => model.id === "video-chat-only").availability, "unsupported_endpoint");
+  const veo = catalog.models.find((model) => model.id === "veo-3.1-1080p-8s");
+  assert.equal(veo.catalogId, "veo-3.1");
+  assert.equal(veo.availability, "available");
+  assert.equal(veo.adapter.payloadKind, "veo");
   assert.equal(account.balance, 5);
   assert.equal(account.used, 1);
 });

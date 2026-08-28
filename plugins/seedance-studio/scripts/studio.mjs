@@ -30,6 +30,38 @@ const ENV = {
   userId: ["SEEDANCE_STUDIO_USER_ID", "RELAY_88API_USER_ID"],
 };
 const VIDEO_ENDPOINT_TYPES = new Set(["openai-video", "video-generation"]);
+const DEFAULT_VIDEO_ADAPTER = Object.freeze({
+  name: "88api-unified-video",
+  createEndpoint: "/v1/videos",
+  statusEndpoint: "/v1/videos/{id}",
+  payloadKind: "unified",
+});
+const VIDEO_MODEL_ADAPTERS = Object.freeze({
+  "veo-3.1": Object.freeze({
+    ...DEFAULT_VIDEO_ADAPTER,
+    name: "88api-veo-3.1",
+    apiModelId: "veo-3.1-1080p-8s",
+    payloadKind: "veo",
+    capabilities: Object.freeze({
+      textToVideo: true, imageReference: true, videoReference: false, audioReference: false,
+      firstLastFrame: false, generatedAudio: true, resolution: "1080p",
+      minDuration: 8, maxDuration: 8, defaultDuration: 8,
+      ratios: Object.freeze(["16:9", "9:16"]), maxImages: 2, maxVideos: 0, maxAudios: 0,
+    }),
+  }),
+  "veo-3.1-fast": Object.freeze({
+    ...DEFAULT_VIDEO_ADAPTER,
+    name: "88api-veo-3.1-fast",
+    apiModelId: "veo-3.1-fast-1080p-8s",
+    payloadKind: "veo",
+    capabilities: Object.freeze({
+      textToVideo: true, imageReference: true, videoReference: false, audioReference: false,
+      firstLastFrame: false, generatedAudio: true, resolution: "1080p",
+      minDuration: 8, maxDuration: 8, defaultDuration: 8,
+      ratios: Object.freeze(["16:9", "9:16"]), maxImages: 2, maxVideos: 0, maxAudios: 0,
+    }),
+  }),
+});
 const AUTH_IDENTITY_VIDEO_LOCK = "【授权真人身份唯一基准】第一张普通参考图（不含首帧/尾帧）是用户明确授权使用的真人身份照片，只控制人物的脸、五官比例、发型、肤色、体型与稳定可见特征。首帧、尾帧及其它 AI 关键帧只控制场景、服装、构图和状态，不得改写人物身份；发生冲突时一律以该真人身份图为准。不要迁移身份图中的背景、镜面重复人物、文字、Logo 或无关物品。保留真实面部不对称、自然皮肤纹理与拍摄质感，禁止标准化美化和换脸。";
 const AUTH_IDENTITY_IMAGE_LOCK = "【授权真人身份唯一基准】第一张参考图是用户明确授权使用的真人身份照片，只控制人物的脸、五官比例、发型、肤色、体型与稳定可见特征。其它参考图只控制场景、服装、构图或风格，不得改写身份；发生冲突时一律以第一张身份图为准。保留真实面部不对称、自然皮肤纹理与拍摄质感，禁止标准化美化和换脸。";
 function withIdentityLock(prompt, lock) {
@@ -101,6 +133,7 @@ function imgExt(buf) {
 const MIME = { ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".webp":"image/webp", ".gif":"image/gif" };
 const CAPS = [
   "视频生成：从 88API /api/pricing 动态获取当前视频模型、价格、能力说明和端点兼容性。",
+  "  • 按模型适配88API规范：目录别名只用于价格匹配，提交使用官方模型名、端点和参数结构。",
   "  • 不再内置固定 Seedance 模型；首次生成前必须由用户明确选择模型。",
   "  • `models` 合并账户可见模型与生成 API Key 的 /v1/models 结果，分开标注目录、账户和 Key 状态。",
   "  • 时长、画幅、分辨率、参考图/视频/音频和首尾帧能力以当前模型目录为准，生成前重新校验。",
@@ -362,8 +395,26 @@ function isVideoCatalogRow(row) {
   const endpoints = listOf(row.supported_endpoint_types);
   return groups.includes("视频模型") || endpoints.some((x) => VIDEO_ENDPOINT_TYPES.has(x)) || /视频|video/i.test(String(row.description || ""));
 }
+function explicitVideoAdapter(modelId) {
+  const id = String(modelId || "");
+  if (VIDEO_MODEL_ADAPTERS[id]) return { catalogId: id, ...VIDEO_MODEL_ADAPTERS[id] };
+  for (const [catalogId, adapter] of Object.entries(VIDEO_MODEL_ADAPTERS)) {
+    if (adapter.apiModelId === id) return { catalogId, ...adapter };
+  }
+  return null;
+}
+function videoAdapterForRow(row) {
+  const catalogId = String(row.model_name || "");
+  const explicit = explicitVideoAdapter(catalogId);
+  if (explicit) return explicit;
+  if (!listOf(row.supported_endpoint_types).some((x) => VIDEO_ENDPOINT_TYPES.has(x))) return null;
+  return { catalogId, apiModelId: catalogId, ...DEFAULT_VIDEO_ADAPTER };
+}
+function statusEndpointFor(adapter, taskId) {
+  return String((adapter && adapter.statusEndpoint) || DEFAULT_VIDEO_ADAPTER.statusEndpoint).replace("{id}", encodeURIComponent(String(taskId)));
+}
 function endpointCompatible(row) {
-  return listOf(row.supported_endpoint_types).some((x) => VIDEO_ENDPOINT_TYPES.has(x));
+  return Boolean(videoAdapterForRow(row));
 }
 function availabilityLabel(value) {
   return ({
@@ -394,10 +445,14 @@ async function fetchVideoCatalog(cfg, options = {}) {
   const vendors = new Map();
   for (const vendor of (pricing.vendors || [])) vendors.set(String(vendor.id), vendor);
   const models = (pricing.data || []).filter(isVideoCatalogRow).map((row) => {
+    const catalogId = String(row.model_name);
+    const adapter = videoAdapterForRow(row);
+    const apiModelId = adapter ? String(adapter.apiModelId || catalogId) : catalogId;
+    const visibilityIds = unique([catalogId, apiModelId]);
     const endpoints = listOf(row.supported_endpoint_types);
-    const compatible = endpointCompatible(row);
-    const userVisible = visible.has(String(row.model_name));
-    const keyVisible = keyResult.ids ? keyResult.ids.has(String(row.model_name)) : null;
+    const compatible = Boolean(adapter);
+    const userVisible = visibilityIds.some((id) => visible.has(id));
+    const keyVisible = keyResult.ids ? visibilityIds.some((id) => keyResult.ids.has(id)) : null;
     let availability = "available";
     if (!compatible) availability = "unsupported_endpoint";
     else if (!userVisible) availability = "not_visible";
@@ -405,7 +460,8 @@ async function fetchVideoCatalog(cfg, options = {}) {
     else if (keyVisible == null) availability = "unverified_key";
     const price = normalizeVideoPrice(row, pricing, status);
     return {
-      id: String(row.model_name),
+      id: apiModelId,
+      catalogId,
       description: String(row.description || ""),
       vendor: (vendors.get(String(row.vendor_id)) || {}).name || String(row.vendor_id || ""),
       enabledGroups: listOf(row.enable_groups || row.enable_group),
@@ -417,7 +473,15 @@ async function fetchVideoCatalog(cfg, options = {}) {
       availabilityLabel: availabilityLabel(availability),
       selectable: compatible && userVisible && keyVisible === true,
       price,
-      capabilities: inferVideoCapabilities(row),
+      adapter: adapter ? {
+        name: adapter.name,
+        catalogId: adapter.catalogId,
+        apiModelId,
+        payloadKind: adapter.payloadKind,
+        createEndpoint: adapter.createEndpoint,
+        statusEndpoint: adapter.statusEndpoint,
+      } : null,
+      capabilities: { ...inferVideoCapabilities(row), ...((adapter && adapter.capabilities) || {}) },
     };
   }).sort((a, b) => Number(b.selectable) - Number(a.selectable)
     || Number(b.endpointCompatible) - Number(a.endpointCompatible)
@@ -492,6 +556,7 @@ async function cmdModels(cfg, args) {
   for (const model of catalog.models) {
     index++;
     log(index + ". " + model.id + " · " + priceLabel(model.price) + " · " + model.availabilityLabel);
+    if (model.catalogId !== model.id) log("   价格目录别名: " + model.catalogId + " · 88API提交模型名: " + model.id);
     const summary = modelSummary(model);
     log("   能力: " + summary);
     if (model.description && model.description !== summary) log("   目录: " + model.description);
@@ -503,7 +568,7 @@ async function cmdModels(cfg, args) {
 async function cmdSetVideoModel(cfg, modelId) {
   const catalog = await fetchVideoCatalog(cfg);
   if (!catalog.apiKeyCheck.checked) die("无法验证生成 API Key 的模型可用状态，未保存选择: " + catalog.apiKeyCheck.error);
-  const model = catalog.models.find((item) => item.id === modelId);
+  const model = catalog.models.find((item) => item.id === modelId || item.catalogId === modelId);
   if (!model) die("88API 当前视频目录中没有模型: " + modelId + "。先运行 models 查看实时列表。");
   if (!model.selectable) die("该模型当前不能由本插件选择: " + model.availabilityLabel + "（端点 " + model.endpointTypes.join(", ") + "）");
   saveConfigPatch({ videoModel: model.id, videoModelSelectedAt: new Date().toISOString(), videoPricingVersion: catalog.pricingVersion });
@@ -541,7 +606,7 @@ async function selectedVideoModel(cfg, args) {
   if (!selectedId) die("尚未选择视频模型。先运行 `node studio.mjs models` 获取 88API 当前视频模型、价格和能力，让用户明确选择后再执行 --set-video-model。");
   const catalog = await fetchVideoCatalog(cfg);
   if (!catalog.apiKeyCheck.checked) die("生成 API Key 验证失败，不能提交付费任务: " + catalog.apiKeyCheck.error);
-  const model = catalog.models.find((item) => item.id === selectedId);
+  const model = catalog.models.find((item) => item.id === selectedId || item.catalogId === selectedId);
   if (!model) die("已选模型已不在 88API 当前目录: " + selectedId + "。请重新运行 models 并让用户选择。");
   if (!model.selectable) die("已选模型当前不可用: " + selectedId + " · " + model.availabilityLabel + "。请重新运行 models 并选择可用模型。");
   return { model, catalog };
@@ -581,9 +646,9 @@ function buildVideoPayload(cfg, args, modelInfo) {
   const audioUrls = asArray(args["audio-url"]);
   const firstFrame = args["first-frame"] ? String(args["first-frame"]) : "";
   const lastFrame = args["last-frame"] ? String(args["last-frame"]) : "";
-  const maxImages = capabilities.maxImages || 30;
-  const maxVideos = capabilities.maxVideos || 10;
-  const maxAudios = capabilities.maxAudios || 10;
+  const maxImages = capabilities.maxImages ?? 30;
+  const maxVideos = capabilities.maxVideos ?? 10;
+  const maxAudios = capabilities.maxAudios ?? 10;
   if (images.length > maxImages) die("模型 " + modelInfo.id + " 的图片参考最多 " + maxImages + " 张（含 --identity-image）");
   if (videoUrls.length > maxVideos) die("模型 " + modelInfo.id + " 的视频参考最多 " + maxVideos + " 个");
   if (audioUrls.length > maxAudios) die("模型 " + modelInfo.id + " 的音频参考最多 " + maxAudios + " 个");
@@ -601,19 +666,25 @@ function buildVideoPayload(cfg, args, modelInfo) {
   if (/seedance-2\.5/i.test(modelInfo.id) && (videoUrls.length || audioUrls.length) && !hasImageAnchor) {
     die("88api 约束：使用视频/音频参考时必须同时提供至少 1 张图片参考（--image / --first-frame <图>）。\n纯视频参考或纯音频参考在本后端不支持——请补一张锚定图/关键帧一起提交。");
   }
-  const payload = {
-    model: modelInfo.id,
-    duration,
-    ratio,
-  };
+  if (!prompt) die("需要 --prompt 提示词");
+  const toUrl = p => /^https?:\/\//.test(p) ? p : imageToDataUrl(resolve(p));
+  if (modelInfo.adapter && modelInfo.adapter.payloadKind === "veo") {
+    const payload = {
+      model: modelInfo.id,
+      prompt,
+      duration,
+      size: ratio === "9:16" ? "1080x1920" : "1920x1080",
+    };
+    if (images.length) payload.images = images.map((p) => toUrl(p));
+    return payload;
+  }
+  const payload = { model: modelInfo.id, duration, ratio };
   if (args["no-audio"]) payload.generate_audio = false;
   else if (args.audio || capabilities.generatedAudio === true) payload.generate_audio = true;
   if (["480p", "720p", "1080p", "2k", "4k"].includes(capabilities.resolution)) payload.resolution = capabilities.resolution;
   if (args.seed !== undefined) payload.seed = parseInt(args.seed, 10);
   const hasMulti = images.length || videoUrls.length || audioUrls.length || firstFrame || lastFrame;
-  if (!prompt) die("需要 --prompt 提示词");
   payload.prompt = prompt;
-  const toUrl = p => /^https?:\/\//.test(p) ? p : imageToDataUrl(resolve(p));
   // 实测：上游要求顶层 prompt 必填。
   // ① 带首帧/尾帧（图生视频）→ 必须走 content[] 并给每项打 role（first_frame/last_frame/reference_*），首帧决定片头画面。
   // ② 仅普通图片参考（无首尾帧、无视频/音频）→ 用 images 简写（最稳路径）。
@@ -647,12 +718,12 @@ function sanitizePayload(p) {
   }
   return clone;
 }
-async function pollTask(cfg, taskId, dir) {
+async function pollTask(cfg, taskId, dir, adapter = DEFAULT_VIDEO_ADAPTER) {
   const started = Date.now();
   let lastStatus = "";
   while (true) {
     if (Date.now() - started > cfg.pollTimeoutMs) die("轮询超时（" + (cfg.pollTimeoutMs / 60000) + " 分钟）。任务可能仍在进行，稍后续查:\n  node studio.mjs status --task " + taskId + ' --wait --out "' + dir + '"');
-    const st = await api(cfg, "GET", "/v1/videos/" + taskId);
+    const st = await api(cfg, "GET", statusEndpointFor(adapter, taskId));
     const line = st.status + " progress=" + (st.progress == null ? "?" : st.progress) + "%";
     if (line !== lastStatus) { log("[poll] " + line); lastStatus = line; }
     if (st.status === "completed") {
@@ -673,19 +744,21 @@ async function cmdVideo(cfg, args) {
   const [{ model, catalog }, account] = await Promise.all([selectedVideoModel(cfg, args), fetchAccount(cfg)]);
   if (Number(account.status) !== 1) die("88API 账户当前不是正常状态（status=" + account.status + "），未提交付费任务。");
   const payload = buildVideoPayload(cfg, args, model);
+  const adapter = model.adapter || DEFAULT_VIDEO_ADAPTER;
+  const createEndpoint = adapter.createEndpoint || DEFAULT_VIDEO_ADAPTER.createEndpoint;
   const dir = outDir(args);
   const estimatedCost = model.price.unit === "second" ? model.price.effective * payload.duration
     : model.price.unit === "request" ? model.price.effective : null;
   if (estimatedCost != null && account.balance < estimatedCost) {
     die("88API 余额不足：当前 " + money(account.balance, account.currency) + "，本次估算 " + money(estimatedCost, model.price.currency) + "。未提交付费任务。");
   }
-  const catalogAudit = { retrievedAt: catalog.retrievedAt, pricingVersion: catalog.pricingVersion, model: model.id, price: model.price, availability: model.availability, balanceBefore: account.balance, balanceCurrency: account.currency };
+  const catalogAudit = { retrievedAt: catalog.retrievedAt, pricingVersion: catalog.pricingVersion, model: model.id, catalogId: model.catalogId, adapter, price: model.price, availability: model.availability, balanceBefore: account.balance, balanceCurrency: account.currency };
   const identitySources = asArray(args["identity-image"]).map(String).map((p) => /^https?:\/\//.test(p) ? p : resolve(p));
   const identityAudit = identitySources.length ? { mode: "authorized-direct", authority: "source-photo", sources: identitySources } : { mode: "generated-or-unspecified", sources: [] };
   if (identitySources.length) log("[IDENTITY] 授权真人原图已作为唯一身份权威直接附加；AI 首尾帧不得改写身份");
   if (args["dry-run"]) {
     log("[DRY-RUN] 不会调用付费接口。将提交:");
-    log("POST " + cfg.baseUrl + "/v1/videos");
+    log("POST " + cfg.baseUrl + createEndpoint);
     log("[IDENTITY-AUDIT] " + JSON.stringify(identityAudit));
     log(JSON.stringify(sanitizePayload(payload), null, 2));
     log("[模型] " + model.id + " · " + modelSummary(model));
@@ -705,21 +778,23 @@ async function cmdVideo(cfg, args) {
   const frameNote = payload.content ? (payload.content.some(c => c.role === "first_frame") ? ", first_frame" : "") + (payload.content.some(c => c.role === "last_frame") ? ", last_frame" : "") : "";
   const identityNote = identitySources.length ? ", identity=authorized-direct" : "";
   const audioMode = payload.generate_audio == null ? "model-default" : String(payload.generate_audio);
-  log("[submit] POST /v1/videos · " + model.id + " (" + payload.duration + "s, " + payload.ratio + ", audio=" + audioMode + frameNote + identityNote + ")");
+  const geometry = payload.size || payload.ratio || payload.resolution || "model-default";
+  log("[submit] POST " + createEndpoint + " · " + model.id + " (" + payload.duration + "s, " + geometry + ", audio=" + audioMode + frameNote + identityNote + ")");
   log("[price] " + priceLabel(model.price) + (estimatedCost != null ? " · 本次估算 " + money(estimatedCost, model.price.currency) : "") + " · 当前余额 " + money(account.balance, account.currency));
-  const task = await api(cfg, "POST", "/v1/videos", payload);
+  const task = await api(cfg, "POST", createEndpoint, payload);
   const taskId = task.id || task.task_id;
   if (!taskId) die("提交响应中无任务 ID: " + JSON.stringify(task).slice(0, 400));
   writeFileSync(runFile, JSON.stringify({ taskId, submittedAt: new Date().toISOString(), catalogAudit, estimatedCost, identityAudit, payload: sanitizePayload(payload) }, null, 2));
   log("[task] " + taskId + " (status=" + task.status + ")");
   if (args["no-wait"]) { log("稍后查询: node studio.mjs status --task " + taskId + ' --wait --out "' + dir + '"'); return; }
-  await pollTask(cfg, taskId, dir);
+  await pollTask(cfg, taskId, dir, adapter);
 }
 async function cmdStatus(cfg, args) {
   if (!args.task) die("需要 --task <任务ID>");
   const taskId = String(args.task);
-  if (args.wait) return pollTask(cfg, taskId, outDir(args));
-  const st = await api(cfg, "GET", "/v1/videos/" + taskId);
+  const adapter = args.model ? (explicitVideoAdapter(String(args.model)) || DEFAULT_VIDEO_ADAPTER) : DEFAULT_VIDEO_ADAPTER;
+  if (args.wait) return pollTask(cfg, taskId, outDir(args), adapter);
+  const st = await api(cfg, "GET", statusEndpointFor(adapter, taskId));
   log(JSON.stringify(st, null, 2));
 }
 // ---------- raw (capability probing: POST an arbitrary payload file as-is) ----------
@@ -733,24 +808,26 @@ async function cmdRaw(cfg, args) {
     if (!cfg.videoModel) die("raw payload 未指定 model，且尚未选择默认视频模型。先运行 models 并执行 --set-video-model。");
     payload.model = cfg.videoModel;
   }
+  const adapter = explicitVideoAdapter(payload.model) || DEFAULT_VIDEO_ADAPTER;
+  const createEndpoint = adapter.createEndpoint || DEFAULT_VIDEO_ADAPTER.createEndpoint;
   const dir = outDir(args);
   if (args["dry-run"]) {
-    log("[DRY-RUN][raw] POST " + cfg.baseUrl + "/v1/videos");
+    log("[DRY-RUN][raw] POST " + cfg.baseUrl + createEndpoint);
     log(JSON.stringify(sanitizePayload(payload), null, 2));
     return;
   }
   const runFile = join(dir, "run.json");
   if (existsSync(runFile)) { const prev = JSON.parse(readFileSync(runFile, "utf8")); die("输出目录已有任务 " + prev.taskId + "（防重复提交）。续查:\n  node studio.mjs status --task " + prev.taskId + ' --wait --out "' + dir + '"'); }
-  log("[submit][raw] POST /v1/videos");
+  log("[submit][raw] POST " + createEndpoint);
   let task;
-  try { task = await api(cfg, "POST", "/v1/videos", payload); }
+  try { task = await api(cfg, "POST", createEndpoint, payload); }
   catch (e) { die("提交失败: " + e.message + "\nbody=" + JSON.stringify(e.body || {}).slice(0, 500)); }
   const taskId = task.id || task.task_id;
   if (!taskId) die("提交响应中无任务 ID: " + JSON.stringify(task).slice(0, 400));
   writeFileSync(runFile, JSON.stringify({ taskId, submittedAt: new Date().toISOString(), payload: sanitizePayload(payload) }, null, 2));
   log("[task] " + taskId + " (status=" + task.status + ")");
   if (args["no-wait"]) { log("稍后: node studio.mjs status --task " + taskId + ' --wait --out "' + dir + '"'); return; }
-  await pollTask(cfg, taskId, dir);
+  await pollTask(cfg, taskId, dir, adapter);
 }
 // ---------- image (keyframes) ----------
 // 单次生图请求（文生图 或 参考图 edits），返回 data[] 数组；失败/无输出抛错供上层回退
@@ -1302,4 +1379,4 @@ async function main(argv = process.argv.slice(2)) {
 const invokedAsScript = process.argv[1] && resolve(process.argv[1]).toLowerCase() === resolve(SCRIPT_PATH).toLowerCase();
 if (invokedAsScript) main().catch(e => { console.error("[ERROR] " + (e && e.message ? e.message : String(e))); process.exitCode = 1; });
 
-export { ONBOARDING_LINES, inferVideoCapabilities, normalizeVideoPrice, isVideoCatalogRow, endpointCompatible, buildVideoPayload, fetchVideoCatalog, fetchAccount, money, priceLabel };
+export { ONBOARDING_LINES, VIDEO_MODEL_ADAPTERS, explicitVideoAdapter, inferVideoCapabilities, normalizeVideoPrice, isVideoCatalogRow, endpointCompatible, buildVideoPayload, fetchVideoCatalog, fetchAccount, money, priceLabel };

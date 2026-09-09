@@ -64,12 +64,16 @@ API Key读取优先级：`SEEDANCE_STUDIO_API_KEY` → `~/.seedance-studio/confi
 
 当前 MiniMax H3 的 88API 模型名是 `minimax-h3-1440p` 与 `minimax-h3-768p`；旧名 `minimax-h3` 不再作为可选或提交模型。Veo 必须使用 `/api/pricing`、`/api/user/models` 与 `/v1/models` 可见的现网公开名 `veo-3.1` / `veo-3.1-fast`；不得使用未上线的文档名称或渠道内部 `*-generate-preview` 名称。
 
-## 生图模型（关键帧 / 锚定图，gpt-image 家族，2026-08 实测）
+## 生图模型（关键帧 / 锚定图，gpt-image 家族）
 
-| 别名 | 模型 id | 端点/返回 | 输出实测 | 用途 |
+Image2 行保留 2026-08 实测记录；两个 Image 2.5 模型 ID 和 Images API 端点于 2026-09-10 从 88API 实时目录核实。2.5 沿用插件 2K 预设，不代表上游分辨率上限，尚未做付费出图实测。
+
+| 别名 | 模型 id | 端点/返回 | 输出预设或既有实测 | 用途 |
 |---|---|---|---|---|
 | （**默认**）`2`/`image2`/`gpt`/`gpt2` | `gpt-image-2` | `/v1/images/generations`（`--ref` 时 `/v1/images/edits` multipart） / **url PNG** | **稳定 2K 档**：16:9≈2048×1152、2:3=1360×2048、方图 2048² | 默认出图主力，不写 `--model` 即用它；出图稳、**支持 `--ref` 垫图/锁角色/锁产品**；newapi 网关对该模型自带兜底 |
 | `4k`/`gpt-image-2-4k`（显式请求） | `gpt-image-2-4k` | `/v1/images/generations` / **url**（Adobe Firefly S3，OpenAI 上游） | **16:9=3840×2160 真 4K UHD**；方图约 2880² | 仅在 `--model 4k`/`gpt-image-2-4k` 显式请求时用（海报级高清）。**88api 侧该渠道时有时无**（断渠道回 `500 … 可用渠道不存在`），**断渠道直接报错、不自动回退** |
+| 精确 ID | `gpt-image-2.5-flare` | `/v1/images/generations` / `/v1/images/edits` | 插件 2K 预设 | 显式选择 Image 2.5 Flare |
+| 精确 ID | `gpt-image-2.5-sunburst` | `/v1/images/generations` / `/v1/images/edits` | 插件 2K 预设 | 显式选择 Image 2.5 Sunburst |
 
 - 命令：`node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model gpt-image-2-4k] [--identity-ref 授权真人原照片] [--ref 场景/产品参考图 ...]`
 - **批量并发出图**：可重复 `--prompt` 出多张不同图，或 `--n` 每个提示词出几张；**总量 = 提示词数 × n**，交给并发池并行跑（`--concurrency` 默认 3、上限 10）。**并发结构抄自 `88api-image-gen`**（`MAX_CONCURRENCY=10`、默认 `concurrency=3`）：`N` 个 dispatcher 从共享游标拉任务，`Promise.all(Array.from({length:N}, dispatcher))`，跑完一个立刻拉下一个；单 key 场景已裁掉参考插件的多 worker/粘性分组。**每张都是独立单图请求**（不用服务端 `n` 批量），各自独立请求与重试（瞬时抖动同模型快速重试 1 次），单张失败/存盘异常不炸整批；输出文件名 `keyframe_<批次时间戳>_<槽位序号>.png`。默认并发保守（3），是为了别把单 key 的上游打到熔断（429/circuit breaker）；批量越大越要留意上游容量。

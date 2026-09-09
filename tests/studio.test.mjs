@@ -131,6 +131,59 @@ test("image preflight reuses the Image2 plugin Key and keeps gpt-image-2 as the 
   assert.doesNotMatch(dryRun.stdout, /gemini/i);
 });
 
+test("Image 2.5 presets survive config and preflight and route generation and edits", async (t) => {
+  const models = ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"];
+  const server = createServer((req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/v1/models") {
+      res.end(JSON.stringify({ data: models.map((id) => ({ id })) }));
+    } else {
+      res.statusCode = 404;
+      res.end("{}");
+    }
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.close());
+  const home = mkdtempSync(join(tmpdir(), "seedance-image25-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(join(home, ".seedance-studio"), { recursive: true });
+  const configPath = join(home, ".seedance-studio", "config.json");
+  const reference = join(home, "reference.png");
+  writeFileSync(reference, Buffer.from("89504e470d0a1a0a", "hex"));
+  const cliPath = fileURLToPath(new URL("../plugins/seedance-studio/scripts/studio.mjs", import.meta.url));
+  const env = { ...process.env, USERPROFILE: home, HOME: home, SEEDANCE_STUDIO_API_KEY: "mock-key" };
+  const runCli = (args) => new Promise((resolveRun, reject) => {
+    const child = spawn(process.execPath, [cliPath, ...args], { env, windowsHide: true });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => resolveRun({ code, stdout, stderr }));
+  });
+  for (const model of models) {
+    writeFileSync(configPath, JSON.stringify({ baseUrl: `http://127.0.0.1:${server.address().port}`, imageModel: model }));
+    const checked = await runCli(["preflight", "--scope", "image", "--json"]);
+    assert.equal(checked.code, 0, checked.stderr);
+    const preflight = JSON.parse(checked.stdout);
+    assert.equal(preflight.image.model, model);
+    assert.equal(preflight.ready, true);
+    for (const edit of [false, true]) {
+      const result = await runCli(["image", "--prompt", "test", "--aspect", "16:9", "--dry-run", "--out", join(home, "out"), ...(edit ? ["--ref", reference] : [])]);
+      assert.equal(result.code, 0, result.stderr);
+      assert.ok(result.stdout.includes(`"model": "${model}"`));
+      assert.match(result.stdout, /"size": "2048x1152"/);
+      assert.ok(result.stdout.includes(`/v1/images/${edit ? "edits" : "generations"}`));
+      assert.doesNotMatch(result.stdout, /自定义模型/);
+    }
+    const selected = models.find((id) => id !== model);
+    const override = await runCli(["image", "--model", selected, "--prompt", "test", "--dry-run", "--out", join(home, "out")]);
+    assert.equal(override.code, 0, override.stderr);
+    assert.ok(override.stdout.includes(`"model": "${selected}"`));
+    assert.equal(JSON.parse(readFileSync(configPath, "utf8")).imageModel, model);
+  }
+});
+
 test("parses Seedance catalog capabilities and limits", () => {
   const capabilities = inferVideoCapabilities({
     model_name: "Seedance-2.5-720p官方版",

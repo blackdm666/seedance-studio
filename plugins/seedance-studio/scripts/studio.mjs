@@ -84,8 +84,10 @@ const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
 const IMG_ASPECTS_4K = { "1:1":"2880x2880","3:2":"3520x2352","2:3":"2352x3520","4:3":"3264x2448","3:4":"2448x3264","16:9":"3840x2160","9:16":"2160x3840","2:1":"3840x1920","1:2":"1920x3840","7:4":"3808x2176","4:7":"2176x3808" };
 const IMAGE_MAX_EDGE = 3840;
-// 生图模型预设（gpt-image 家族，全部走 /v1/images/*；2026-08 实测）
+// 生图模型预设（gpt-image 家族，全部走 /v1/images/*；2.5 ID 于 2026-09-10 从 88API 目录核实，沿用 2K 预设）
 const IMG_MODELS = {
+  "gpt-image-2.5-flare": { id: "gpt-image-2.5-flare", kind: "images", scale: "2k", note: "Image 2.5 Flare；插件使用 2K 尺寸预设，支持文生图和 --ref 编辑" },
+  "gpt-image-2.5-sunburst": { id: "gpt-image-2.5-sunburst", kind: "images", scale: "2k", note: "Image 2.5 Sunburst；插件使用 2K 尺寸预设，支持文生图和 --ref 编辑" },
   "gpt-image-2":     { id: "gpt-image-2",     kind: "images", scale: "2k", note: "默认模型·稳定 2K 档（16:9≈2048×1152、2:3=1360×2048，返回 URL；OpenAI 上游）；出图稳、支持 --ref 垫图/锁角色；网关侧对该模型自带兜底，插件不再自建兜底" },
   "gpt-image-2-4k":  { id: "gpt-image-2-4k",  kind: "images", scale: "4k", note: "高清档（16:9 实测真 4K UHD 3840×2160；方图约 2880²，返回 URL；OpenAI 上游）。仅在 --model 4k/gpt-image-2-4k 显式请求时调用；88api 侧该渠道时有时无，断渠道会直接报错（不自动回退）" },
 };
@@ -102,6 +104,8 @@ const IMG_MAX_CONCURRENCY = 10;
 const IMG_DEFAULT_CONCURRENCY = 3;
 function resolveImgModel(name) {
   if (!name) return IMG_MODELS["gpt-image-2"];
+  const preset = IMG_MODELS[String(name).toLowerCase()];
+  if (preset) return preset;
   const key = IMG_ALIASES[String(name).toLowerCase()];
   if (key) return IMG_MODELS[key];
   const id = String(name);
@@ -151,10 +155,11 @@ const CAPS = [
   "  • 按秒计费模型会在 dry-run 和正式提交前显示实时单价、价格版本和本次估算金额。",
   "账户：个人访问令牌只读调用 /api/user/self、/api/pricing、/api/status、/api/user/models；API Key 仅调用生成端点。",
   "音频反推：默认 gemini-3.7-flash，通过 /v1/chat/completions 的 input_audio 一次拆解台词、BGM 与音效。",
-  "生图（关键帧/锚定图，纯 gpt-image 家族，2026-08 实测）：",
+  "生图（关键帧/锚定图，gpt-image 家族；2.5 使用插件 2K 预设）：",
   "  • 默认 gpt-image-2（OpenAI 上游，/v1/images）：稳定 2K 档（16:9≈2048×1152、2:3=1360×2048），出图稳、支持 --ref；不写 --model 即用它。网关侧对 image2 自带兜底，插件不再自建兜底链。",
   "  • gpt-image-2-4k（`--model 4k` / `--model gpt-image-2-4k` 显式请求）：16:9 出真 4K UHD 3840×2160；方图约 2880²（返回 URL）。88api 侧该渠道时有时无，断渠道直接报错、不自动回退。",
   "  • 错误分类分流：确定性错误(401/审核/模型名/400)立即停并诊断；上游熔断/容量/瞬时抖动(fetch failed/timeout/502/504)同模型快速重试 1 次，再不行报错交用户决定。",
+  "  • gpt-image-2.5-flare / gpt-image-2.5-sunburst：用 --model 精确 ID 选择，使用插件 2K 尺寸预设，不改变默认模型。",
   "  • 参考图生图（垫图/锁角色/锁产品）：加 `--ref <图> [--ref <图>...]`——走 /v1/images/edits；功能三保产品/人物一致性首选",
 ];
 const ONBOARDING_LINES = [
@@ -258,7 +263,7 @@ function fatalHint(msg) {
   const s = String(msg || "").toLowerCase();
   if (/http 401|unauthorized|invalid api key|incorrect api key|missing api key/.test(s)) return "\n[诊断] Key 缺失、无效或无权限。通过 Codex 使用时，请把可用的 88API Key 交给 Agent，由 Agent 一键重设并脱敏验证。";
   if (/content[_ ]?(policy|moderat)|moderation|nsfw|内容审核/.test(s)) return "\n[诊断] 内容审核未通过（非上游故障）→ 调整提示词/参考图后再试，勿反复重交。";
-  if (/model_not_found|not supported model/.test(s)) return "\n[诊断] 模型名/端点不匹配 → 检查 --model（仅支持 gpt-image-2-4k / gpt-image-2 或自定义 images 模型 id）。";
+  if (/model_not_found|not supported model/.test(s)) return "\n[诊断] 模型名/端点不匹配 → 检查 --model（内置 gpt-image-2、gpt-image-2-4k、gpt-image-2.5-flare、gpt-image-2.5-sunburst，也支持自定义 images 模型 id）。";
   if (/http 400|invalid parameter/.test(s)) return "\n[诊断] 请求参数不合法 → 检查 --aspect / --ref（参考图是否可读、是否 >8MB）。";
   return "\n[诊断] 确定性错误：换模型/重试无用，请按上面报文修正后再试。";
 }
@@ -1559,6 +1564,7 @@ async function main(argv = process.argv.slice(2)) {
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
     '  生图:  node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model gpt-image-2-4k] [--identity-ref 授权真人图] [--ref 场景/产品图 ...] [--dry-run]',
     "          多张并发：重复 --prompt 出多张不同图，或 --n 每个提示词出几张；总量 = 提示词数 × n，用并发池并行跑（默认并发 3、上限 10）",
+    "          可选 --model gpt-image-2.5-flare / gpt-image-2.5-sunburst（插件 2K 预设）；",
     "          默认 gpt-image-2(稳定 2K，网关自带兜底)；要更高清加 --model gpt-image-2-4k(16:9 真 4K UHD，断渠道直接报错)；均走 /v1/images，支持 --ref 垫图锁角色",
     "  拼接:  node studio.mjs concat --dir <segments目录> [--input a.mp4 --input b.mp4] [--out final.mp4] [--reencode]",
     "  运动理解: node studio.mjs depth --video <片> [--mode auto|character|landscape|action] [--fps N] [--no-depth] [--out 目录]",

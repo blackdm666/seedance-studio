@@ -33,7 +33,7 @@
 - 🎬 动态视频目录与模型适配：从 `/api/pricing` 获取当前视频模型、价格和能力，再按各模型的 88API 规范选择提交模型名、端点和请求参数，并与 `/api/user/models`、`/v1/models` 交叉验证
 - 💰 账户与计费：只读查询余额，按实时计价单位显示单价，并在付费提交前计算本次估算金额
 - 🎧 `gemini-3.7-flash`：默认用于视频音频反推，一次拆出台词、BGM 和音效时间线
-- 🖼 gpt-image-2 生图：关键帧预审、人物/产品/场景锚定图（跨段一致性）
+- 🖼 gpt-image-2 / gpt-image-2-4k / gpt-image-2.5-flare / gpt-image-2.5-sunburst 生图：关键帧预审、人物/产品/场景锚定图（跨段一致性）
 - 👤 授权人物直传：用户另行提供并指定的人物原图作为唯一身份权威，每张关键帧与视频请求都直接携带，避免 AI 图套 AI 图造成身份漂移和合成感
 - 🔍 反推：ffmpeg 抽帧 + Codex 逐帧观察，零 API 成本，证据优先防幻觉
 - 🧵 拼接：`concat` 命令流复制拼段（异常时 `--reencode`）
@@ -41,7 +41,7 @@
 - 📡 任务监控：提交后立即返回任务ID，Agent提示用户耐心等待并持续输出状态心跳，直到下载完成
 - 🧾 参考图审计：图生视频必须通过 `--require-image` 和 `[REFERENCE-AUDIT]`，缺图时在付费前拦截
 
-图片生成默认固定使用 `gpt-image-2`。只有用户明确要求4K才使用 `gpt-image-2-4k`；只有明确点名 Nano Banana/Gemini 时才转到 Gemini 图片插件。
+图片生成默认使用 `gpt-image-2`。明确点名时可传 `--model gpt-image-2.5-flare` 或 `--model gpt-image-2.5-sunburst`；两个新模型使用插件 2K 预设，不代表上游仅支持 2K。用户未指定其它模型而明确要求4K时使用 `gpt-image-2-4k`；只有明确点名 Nano Banana/Gemini 时才转到 Gemini 图片插件。
 
 插件在询问凭据前会运行程序级 `preflight`。它能识别 Seedance 自身配置，也会复用本机 `88api-image-gen` 或 `88api-nano-banana` 已保存的88API Key；预检显示有效时不会重复索要。
 

@@ -1,6 +1,6 @@
 # Multimodal reference control
 
-Check `api.md` before quoting input ceilings: ≤30 images, ≤10 videos, ≤10 audio, **≤50 combined**; single take 4–30s, fixed 720P. Video/audio references must be public HTTP(S) URLs; local images can be base64 Data URLs.
+Read `api.md` and the live model catalog for each model’s limits. Public video/audio references require HTTPS. Local images are uploaded by the CLI (Veo uses Base64). Use `images` and model-specific `metadata` fields; never send the old `content[]` contract. Where frames are exclusive, keep authorized identity in ordinary reference mode and do not mix it with first/last frames.
 
 ## Assign one authority per dimension
 

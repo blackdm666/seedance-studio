@@ -1,6 +1,6 @@
 {
   "name": "seedance-studio",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "88API 动态视频短片工作室：实时查询账户余额、视频模型价格、能力和可用状态，由用户选择模型后生成短片/TVC，并支持视频反推与复刻工程包。",
   "homepage": "https://88api.ai/",
   "author": {
@@ -15,7 +15,10 @@
     "shortDescription": "一句话生成短片/TVC，也能反推参考视频、整理可复刻工程包。实时比较 88API 视频模型、价格和能力，由你选模型再出片。",
     "longDescription": "88API-Seedance-Studio 是一站式 AI 短片工作室。你可以直接描述一个想法，也可以提供一条参考视频。插件主要完成三类任务：一句话出片：完成需求整理、分镜、提示词、视频生成、下载与交付，适合短片、TVC 和广告素材。视频反推：拆解参考视频的画面、运镜、动作、台词、BGM 与音效，生成可直接使用的提示词。复刻工程包：整理分镜、素材职责和缺失素材，可替换成自己的产品或已授权人物。正式出片前，插件会实时查询 88API 当前视频模型、价格、时长、分辨率、多模态能力和可用状态，并由你明确选择模型。支持单段直出、多镜拼接、关键帧生成（Image2 2K/4K、Image 2.5 Flare/Sunburst 2K 预设）、人物身份保持和音频拆解。首次使用需要配置 API Key 和个人访问令牌。两项凭据都可以在受信任的聊天中交给 Agent 一键配置；个人访问令牌也保留本机隐藏输入方式。配置完成后自动继续原任务。",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
     "websiteURL": "https://88api.ai/",
     "brandColor": "#55A6A5",
     "composerIcon": "./assets/composer-icon.png",

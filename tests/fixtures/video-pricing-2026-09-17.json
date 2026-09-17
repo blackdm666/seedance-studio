@@ -1,0 +1,770 @@
+{
+  "source": "https://88api.ai/api/pricing",
+  "retrievedAt": "2026-09-17",
+  "success": true,
+  "pricing_version": "a42d372ccf0b5dd13ecf71203521f9d2",
+  "auto_groups": [
+    "视频模型"
+  ],
+  "group_ratio": {
+    "视频模型": 1
+  },
+  "data": [
+    {
+      "model_name": "kling-3.0-turbo-4k",
+      "description": "Kling 3.0 Turbo 官方渠道 4K 视频模型。支持文生视频、图生视频、首尾帧、多图参考、参考视频、音效生成和镜头控制，不支持参考音频；支持 16:9、9:16、1:1，时长 4–15 秒，默认 5 秒。",
+      "icon": "Kling.Color",
+      "vendor_id": 29,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 1.5)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "SD2.5 1080P",
+      "description": "Seedance 2.5 第三方满血版，固定 1080P。支持文生视频、最多 30 张参考图、10 个参考视频、10 个参考音频和首尾帧；支持 4–30 秒与 auto、1:1、21:9、16:9、9:16、3:4、4:3。默认生成音频，可关闭；参考视频单个 2–30 秒，合计不超过 30 秒。",
+      "vendor_id": 30,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 1.6)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "kling-3.0-turbo-2k",
+      "description": "Kling 3.0 Turbo 官方渠道 2K 视频模型。支持文生视频、图生视频、首尾帧、多图参考、参考视频、音效生成和镜头控制，不支持参考音频；支持 16:9、9:16、1:1，时长 4–15 秒，默认 5 秒。",
+      "icon": "Kling.Color",
+      "vendor_id": 29,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 1.2)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "grok-imagine-video",
+      "description": "Grok Imagine Video 支持纯文生视频或最多 1 张首帧图生视频，提供 480P/720P、1–15 秒（默认 8 秒）和 16:9、9:16、1:1、4:3、3:4、3:2、2:3 七种比例，生成结果默认带音轨。",
+      "vendor_id": 31,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.1)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "minimax-h3-768p",
+      "description": "MiniMax H3 固定 768P 视频模型，按秒计费，单价 ¥0.10/秒。支持文生视频、最多 10 张参考图、5 个参考视频、5 个参考音频和首尾帧；参考音频需同时搭配图片、视频、首帧或尾帧。支持 1:1、16:9、9:16，时长 4–15 秒，默认 4 秒。",
+      "vendor_id": 13,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.1)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      },
+      "billing_usage_examples": [
+        {
+          "label": "768P 1s",
+          "facts": {
+            "seconds": 1
+          }
+        },
+        {
+          "label": "768P 5s",
+          "facts": {
+            "seconds": 5
+          }
+        },
+        {
+          "label": "768P 15s",
+          "facts": {
+            "seconds": 15
+          }
+        }
+      ]
+    },
+    {
+      "model_name": "Seedance-2.5-720p官方版",
+      "description": "Seedance 2.5 官方渠道 720P 视频模型。支持文生视频、最多 30 张参考图、10 个参考视频、10 个参考音频和首尾帧；支持 16:9、9:16、1:1、4:3、3:4、21:9，时长 4–30 秒，默认 4 秒。首尾帧模式不可与其他参考素材混用。",
+      "icon": "ByteDance.Color",
+      "vendor_id": 30,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 1.2)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "gemini-omni-flash",
+      "description": "Gemini Omni Flash 是 Google Preview 视频生成与连续编辑模型。固定输出 720P，支持 16:9/9:16 和 3–10 秒；可使用最多 10 张参考图或 1 个不超过 10 秒、64MiB 的 MP4/MOV 参考视频，不支持参考音频。",
+      "vendor_id": 19,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 4,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.2)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "SD2.0 720P",
+      "description": "Seedance 2.0 第三方满血版，固定 720P。支持文生视频、最多 9 张参考图、3 个参考视频、3 个参考音频和首尾帧，三类参考素材合计不超过 12 个；支持 4–15 秒，默认 5 秒，以及 1:1、21:9、16:9、9:16、3:4、4:3。输出固定带音频。",
+      "vendor_id": 30,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.85)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "kling-3.0-turbo-1080p",
+      "description": "Kling 3.0 Turbo 官方渠道 1080P 视频模型。支持文生视频、图生视频、首尾帧、多图参考、参考视频、音效生成和镜头控制，不支持参考音频；支持 16:9、9:16、1:1，时长 4–15 秒，默认 5 秒。",
+      "icon": "Kling.Color",
+      "vendor_id": 29,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 1.1)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "SD2.0 480P",
+      "description": "Seedance 2.0 第三方满血版，固定 480P。支持文生视频、最多 9 张参考图、3 个参考视频、3 个参考音频和首尾帧，三类参考素材合计不超过 12 个；支持 4–15 秒，默认 5 秒，以及 1:1、21:9、16:9、9:16、3:4、4:3。输出固定带音频。",
+      "vendor_id": 30,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.35)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "seedance-2.0-mini-720p",
+      "description": "Seedance 2.0 Mini 固定 720P 视频模型。支持文生视频、支持参考生成，但参考能力有限，不适合做全参考使用，最多 9 张参考图、3 个参考视频和 3 个参考音频；支持 16:9、9:16、1:1、4:3、3:4、21:9，时长 4–15 秒，默认 5 秒，兼顾清晰度与生成成本。",
+      "icon": "ByteDance.Color",
+      "vendor_id": 30,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.33)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "wan3.0-video-720p",
+      "description": "Wan 3.0 Video 官方渠道 720P 视频模型。支持文生视频、最多 10 张参考图、5 段参考视频、5 段参考音频，以及首帧和尾帧输入；参考视频和参考音频总时长分别不超过 15 秒。支持 16:9、9:16、1:1、4:3、3:4，时长 4–30 秒，默认 5 秒。",
+      "icon": "Qwen.Color",
+      "vendor_id": 25,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai",
+        "openai-video"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.6)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "grok-imagine-video-1.5",
+      "description": "Grok Imagine Video 1.5 支持纯文生视频或最多 1 张首帧图生视频，提供 480P/720P、1–15 秒（默认 8 秒）和七种比例，生成结果默认带音轨；当前 88API 链路不支持参考视频或参考音频。",
+      "vendor_id": 31,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.2)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "SD2.0 1080P",
+      "description": "Seedance 2.0 第三方满血版，固定 1080P。支持文生视频、最多 9 张参考图、3 个参考视频、3 个参考音频和首尾帧，三类参考素材合计不超过 12 个；支持 4–15 秒，默认 5 秒，以及 1:1、21:9、16:9、9:16、3:4、4:3。输出固定带音频。",
+      "vendor_id": 30,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 1.4)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "SD2.5 720P",
+      "description": "Seedance 2.5 第三方满血版，固定 720P。支持文生视频、最多 30 张参考图、10 个参考视频、10 个参考音频和首尾帧；支持 4–30 秒与 auto、1:1、21:9、16:9、9:16、3:4、4:3。默认生成音频，可关闭；参考视频单个 2–30 秒，合计不超过 30 秒。",
+      "vendor_id": 30,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.95)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "Seedance-2.0-720p官方版",
+      "description": "Seedance 2.0 官方渠道 720P 视频模型。支持文生视频、最多 9 张参考图、3 个参考视频、3 个参考音频和首尾帧；支持 16:9、9:16、1:1、4:3、3:4、21:9，时长 4–15 秒，默认 4 秒。首尾帧模式不可与其他参考素材混用。",
+      "icon": "ByteDance.Color",
+      "vendor_id": 30,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.8)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "seedance-2.0-mini-480p",
+      "description": "Seedance 2.0 Mini 固定 480P 视频模型。支持文生视频、支持参考生成，但参考能力有限，不适合做全参考使用，最多 9 张参考图、3 个参考视频和 3 个参考音频；支持 16:9、9:16、1:1、4:3、3:4、21:9，时长 4–15 秒，默认 5 秒。价格实惠，适合低成本草稿、测试和批量生成。",
+      "icon": "ByteDance.Color",
+      "vendor_id": 30,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.21)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "veo-3.1",
+      "description": "Veo 3.1 是 Google 高质量视频生成模型。当前 88API 支持文生视频和图片生视频、720P/1080P、16:9/9:16、4/6/8 秒，并支持原生同步音频，适合电影感短片和高质量内容创作。",
+      "vendor_id": 19,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "u(\"resolution\") == \"4k\" ? tier(\"4k\", u(\"seconds\") * 0.375) : tier(\"base\", u(\"seconds\") * 0.25)",
+      "billing_usage_schema": {
+        "resolution": {
+          "enum": [
+            "720p",
+            "1080p",
+            "4k"
+          ],
+          "description": {
+            "en": "Output video resolution",
+            "zh": "输出视频分辨率"
+          }
+        },
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "veo-3.1-fast",
+      "description": "Veo 3.1 Fast 是侧重速度与成本效率的视频生成模型。当前 88API 支持文生视频和图片生视频、720P/1080P、16:9/9:16、4/6/8 秒，并支持原生同步音频，适合快速预览、批量素材和创意迭代。",
+      "vendor_id": 19,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "u(\"resolution\") == \"4k\" ? tier(\"4k\", u(\"seconds\") * 0.2333333) : tier(\"base\", u(\"seconds\") * 0.1)",
+      "billing_usage_schema": {
+        "resolution": {
+          "enum": [
+            "720p",
+            "1080p",
+            "4k"
+          ],
+          "description": {
+            "en": "Output video resolution",
+            "zh": "输出视频分辨率"
+          }
+        },
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "wan3.0-video-480p",
+      "description": "Wan 3.0 Video 官方渠道 480P 视频模型。支持文生视频、最多 10 张参考图、5 段参考视频、5 段参考音频，以及首帧和尾帧输入；参考视频和参考音频总时长分别不超过 15 秒。支持 16:9、9:16、1:1、4:3、3:4，时长 4–30 秒，默认 5 秒。",
+      "vendor_id": 25,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai",
+        "openai-video"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.3)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "grok-imagine-video-1.5-1080p",
+      "description": "Grok Imagine Video 1.5  固定1080P版本 支持纯文生视频或最多 1 张首帧图生视频、1–15 秒（默认 8 秒）和七种比例，生成结果默认带音轨。",
+      "vendor_id": 31,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.3)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "kling-3.0-turbo-720p",
+      "description": "Kling 3.0 Turbo 官方渠道 720P 视频模型。支持文生视频、图生视频、首尾帧、多图参考、参考视频、音效生成和镜头控制，不支持参考音频；支持 16:9、9:16、1:1，时长 4–15 秒，默认 5 秒。",
+      "icon": "Kling.Color",
+      "vendor_id": 29,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.8)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "SD2.5 480P",
+      "description": "Seedance 2.5 第三方满血版，固定 480P。支持文生视频、最多 30 张参考图、10 个参考视频、10 个参考音频和首尾帧；支持 4–30 秒与 auto、1:1、21:9、16:9、9:16、3:4、4:3。默认生成音频，可关闭；参考视频单个 2–30 秒，合计不超过 30 秒。",
+      "vendor_id": 30,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.45)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "Seedance-2.0-fast-720p官方版",
+      "description": "Seedance 2.0 Fast 官方渠道 720P 高性价比视频模型，适合快速预览和批量创作。支持文生视频、最多 9 张参考图、3 个参考视频、3 个参考音频和首尾帧；支持 16:9、9:16、1:1、4:3、3:4、21:9，时长 4–15 秒，默认 4 秒。首尾帧模式不可与其他参考素材混用。",
+      "icon": "ByteDance.Color",
+      "vendor_id": 30,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 0.6)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    },
+    {
+      "model_name": "wan3.0-video-1080p",
+      "description": "Wan 3.0 Video 官方渠道 1080P 视频模型。支持文生视频、最多 10 张参考图、5 段参考视频、5 段参考音频，以及首帧和尾帧输入；参考视频和参考音频总时长分别不超过 15 秒。支持 16:9、9:16、1:1、4:3、3:4，时长 4–30 秒，默认 5 秒。",
+      "icon": "Qwen.Color",
+      "vendor_id": 25,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "视频模型"
+      ],
+      "supported_endpoint_types": [
+        "openai",
+        "openai-video"
+      ],
+      "billing_mode": "tiered_expr",
+      "billing_expr": "tier(\"base\", u(\"seconds\") * 1.1)",
+      "billing_usage_schema": {
+        "seconds": {
+          "type": "number",
+          "unit": "second",
+          "description": {
+            "en": "Video generation unit price",
+            "zh": "视频生成单价"
+          }
+        }
+      }
+    }
+  ]
+}

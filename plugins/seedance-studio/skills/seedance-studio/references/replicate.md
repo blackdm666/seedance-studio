@@ -38,7 +38,7 @@ node studio.mjs image --identity-ref "assets/source/person.jpg" --prompt "<首�
 node studio.mjs image --identity-ref "assets/source/person.jpg" --ref "assets/scene.png" --prompt "<尾帧>" --out assets/final
 
 # 视频请求继续直传原照片，首尾帧不得成为身份权威
-node studio.mjs video --identity-image "assets/source/person.jpg" --first-frame "assets/start/first.png" --last-frame "assets/final/last.png" --prompt "<提示词>" --duration 9 --ratio 9:16 --dry-run
+node studio.mjs video --identity-image "assets/source/person.jpg" --image "assets/start/first.png" --image "assets/final/last.png" --prompt "<提示词>" --duration 9 --ratio 9:16 --dry-run
 ```
 
 dry-run 必须输出 `mode:"authorized-direct"`。若请求里只有 AI 首尾帧而没有原照片，停止提交。

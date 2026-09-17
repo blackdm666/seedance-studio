@@ -1,6 +1,6 @@
 # 88API 账户、模型目录与生成 API 速查
 
-来源：88api.ai 官方文档 `/zh/docs/api/video/seedance-2-5`（2026-08 抓取）。
+来源：[88API 视频 API 完整调用规范](https://88api.ai/zh/docs/api/video/video-api-standard/)（2026-09-17 核对，含 2026-09-15 任务迁移说明）及当日鉴权模型目录。服务端的任务插件由 NewAPI 管理；客户端仍使用公开 `/v1/videos`，不要直接调用内部插件端点或上游模型。
 
 ## 基本信息
 
@@ -43,26 +43,38 @@ API Key读取优先级：`SEEDANCE_STUDIO_API_KEY` → `~/.seedance-studio/confi
 | `GET /api/user/models` | 当前账户可见模型 | `data[]` 精确模型 ID |
 | `GET /v1/models` | 当前 API Key 可调用模型 | `data[].id` |
 
-余额按 `/api/user/self.data.quota / /api/status.data.quota_per_unit` 换算；`quota` 是当前剩余额度，不再减 `used_quota`。视频模型筛选以“视频模型”分组或视频端点为证据；当前 CLI 只允许 `supported_endpoint_types` 含 `openai-video` 或 `video-generation` 的模型走 `/v1/videos`。状态分层如下：
+余额按 `/api/user/self.data.quota / /api/status.data.quota_per_unit` 换算；`quota` 是当前剩余额度，不再减 `used_quota`。视频模型筛选以“视频模型”分组或视频端点为证据；已核实的模型使用对应适配器；未知模型只有声明视频端点，或同时属于“视频模型”分组且提供 `billing_usage_schema.seconds.unit=second`，才适配统一任务协议。任务插件模型的旧端点标签可能只有 `openai`，不得据此误判不兼容；普通聊天模型也不能只因 `openai` 被当成视频模型。状态分层如下：
 
 - `available`：实时目录存在、账户可见、当前 API Key 的 `/v1/models` 可见且端点兼容。
 - `unverified_key`：目录和账户可见，但 API Key 未配置或验证失败；不得付费生成。
 - `not_in_api_key`：目录和账户可见，但当前 API Key 不可用。
 - `unsupported_endpoint`：是视频模型，但当前 CLI 没有对应生成端点适配；只展示，不允许选择。
 
-`billing_mode=per_second` 时，实际单价 = `model_price × 自动分组倍率`，单位取 `/api/status` 的展示币种；提交前记录 `pricing_version` 和获取时间。该可用状态不是上游容量健康保证，临时熔断仍可能发生。
+`billing_mode=tiered_expr` 时读取完整 `billing_expr`，识别 `tier("base", u("seconds") * 单价)` 及按 `resolution` 分支的单价，估算为 **秒数 × 表达式单价 × 账户目录返回的分组倍率**。保留表达式、价格版本、获取时间和所选档位；未知表达式显示“无法估算”并阻止付费提交，绝不能回退到 `model_ratio` 的 Token 价格或把未知价格当作零。旧 `per_second` / `billing_unit=second` 与按次计费仍兼容。估算不等于最终账单；以服务端实际结算为准。
 
-## 视频模型适配器
+## 统一视频任务与模型差异
 
-插件不把所有模型强行套进同一种请求体。流程是：价格目录模型名 → 模型适配器 → 88API提交模型名、创建端点、状态端点和请求参数。没有专用适配器时，只有目录声明 `openai-video` / `video-generation` 才使用统一 `/v1/videos` 请求体。
+- 创建 `POST /v1/videos`，优先保存返回的公开 `id`，轮询 `GET /v1/videos/{id}`；旧 `task_id` 只作为兼容回退。
+- 公共载荷：`model` 为目录中的精确名称、`prompt`、整数 `duration`、`size`。CLI 的 `--ratio` 映射到 `size`，不再发送顶层 `ratio` 或旧多模态 `content[]`。
+- 普通图片使用顶层 `images`；SD、Seedance、Wan、Kling、H3 的视频/音频参考使用 `metadata.referenceVideos` / `metadata.referenceAudios`。
+- 首尾帧使用 `metadata.firstFrame` / `metadata.lastFrame`；尾帧不能单独提交。SD2.0/2.5、Seedance 官方版和部分 Wan 档位首尾帧与普通参考素材互斥，CLI 提前拦截，不能静默丢素材。
+- SD2.0 三档的图片/视频/音频参考合计最多 12 个。模型更严格的实时目录上限优先，不能把别的模型上限套入。
+- 分辨率由精确销售型号锁定，如 `SD2.5 1080P`、`wan3.0-video-1080p`；不通过顶层 `resolution` 覆盖。
+- `--audio` / `--no-audio` 只用于 SD2.5、Kling 或 Veo 等明确允许音频开关的型号；“生成结果带音轨”不代表支持切换开关。
+- 新插件任务不发送 `callback_url`，统一轮询。创建请求不自动重试；发出请求前先保存提交记录，即使网络断开也防止重复计费。
 
-| 价格目录名称 | 88API提交模型名 | 创建/状态端点 | 关键参数 |
-|---|---|---|---|
-| `veo-3.1` | `veo-3.1` | `POST /v1/videos` · `GET /v1/videos/{id}` | 固定 `duration:8`；横屏 `size:1920x1080`、竖屏 `1080x1920`；图片最多2张 |
-| `veo-3.1-fast` | `veo-3.1-fast` | 同上 | 同上 |
-| 目录声明 `openai-video` / `video-generation` 的其它模型 | 目录精确模型名 | `POST /v1/videos` · `GET /v1/videos/{id}` | 按目录实时能力构造 |
+| 模型族 | 特殊规则 |
+|---|---|
+| Veo 3.1 / Fast | 4/6/8 秒；`--resolution 720p|1080p`，默认为 1080p；`size` 为像素尺寸。`--image` 默认 `metadata.video_mode=reference`，最多 3 张且固定 8 秒；`--first-frame` / `--last-frame` 使用 `frames`，最多 2 张。也可显式 `--video-mode frames`；不接受视频/音频参考。显式图片输入必须为 PNG/JPEG Base64，每张 ≤20 MiB，CLI 自动处理。本型号最终开放能力以上游实际返回为准。 |
+| Grok 视频 | 最多 1 张首图；`--first-frame` 转成 `images`；无尾帧/视频/音频参考。普通型号可通过 `--resolution 480p|720p` 设置 `metadata.resolution`，1080p 销售型号不可覆盖。支持 3:2、2:3 在内的七种比例。 |
+| Gemini Omni | 视频参考必须放顶层 `video`，最多 1 个；无参考音频和首尾帧。视频 MP4/MOV ≤10 秒、≤64 MiB；图片最多 10 张。时长 3–10 秒，无已核实默认值时明确指定。 |
+| MiniMax H3 | 只使用实时公开模型名。不同服务路径能力可能不同，目录上限不代表所有上游保证；音频参考须同时搭配视觉素材。 |
 
-当前 MiniMax H3 的 88API 模型名是 `minimax-h3-1440p` 与 `minimax-h3-768p`；旧名 `minimax-h3` 不再作为可选或提交模型。Veo 必须使用 `/api/pricing`、`/api/user/models` 与 `/v1/models` 可见的现网公开名 `veo-3.1` / `veo-3.1-fast`；不得使用未上线的文档名称或渠道内部 `*-generate-preview` 名称。
+### 本地图片与公网素材
+
+非 Veo 模型的 `--image`、`--identity-image`、`--first-frame` 和 `--last-frame` 支持本地图片。CLI 在正式生成前用 `/v1/media/uploads` 申请凭证（真实字节数、MIME、SHA-256 Base64URL），再用短期凭证 PUT 到 `assets.88api.ai`，最终只把 HTTPS URL 放进生成请求。上传地址不接收 API Key；`--dry-run` 只列本地路径占位，不上传、不生成。Veo 图片转换为 Base64，远程图片会先匿名下载。
+
+视频/音频参考目前仍由 `--video-url` / `--audio-url` 接收匿名可下载的公网 HTTPS 直链；不能传本地路径、HTTP 或 Data URL。素材格式、时长和文件大小还要符合所选模型限制，成功上传不能增加模型能力。上传素材及站内归档结果通常保存 30 天，官方结果地址按来源有效期处理。
 
 ## 生图模型（关键帧 / 锚定图，gpt-image 家族）
 
@@ -89,7 +101,7 @@ Image2 行保留 2026-08 实测记录；两个 Image 2.5 模型 ID 和 Images AP
 ### 授权真人身份直传
 
 - `image --identity-ref <原照片>`：把原照片固定为第一张参考并自动注入身份唯一基准；普通 `--ref` 只能控制场景、服装、构图或产品。每张含脸关键帧都必须再次传同一原照片，禁止 AI 图套 AI 图替代身份。
-- `video --identity-image <原照片>`：把原照片作为第一张普通 `reference_image` 直接送入 Seedance；首帧/尾帧仍分别使用 `first_frame` / `last_frame` role，但提示词自动声明它们不能改写身份。
+- `video --identity-image <原照片>`：把原照片固定为顶层 `images` 第一张，提示词声明身份唯一权威。模型要求首尾帧与普通素材互斥时，应保留原身份图并改用普通参考模式，不能混用或丢弃身份图。
 - 两个参数都只接受一个身份权威，并阻止与普通 `--ref` / `--image` 重复提交同一文件。
 - `video --dry-run` 输出 `[IDENTITY-AUDIT]`；真实提交的 `run.json` 记录 `identityAudit.mode="authorized-direct"` 和来源路径，便于确认原图没有在关键帧阶段被丢弃。
 - 这些参数只用于用户有权使用、并明确指定的人物照片；参考视频中的演员不属于此分支。
@@ -110,55 +122,18 @@ Image2 行保留 2026-08 实测记录；两个 Image 2.5 模型 ID 和 Images AP
 - **局限**：时间戳是**模型估算、非帧级精准**；要词级精准需等 88api 挂上 whisper 渠道（届时 `--model whisper-1` 可改走 `/v1/audio/transcriptions`）。
 - **合规**：BGM 只描述、不逐字转录歌词、不提取原曲（版权）；转写仅用于反推分析。
 
-## Seedance 2.5 专属能力边界
+## Seedance 2.5 能力说明
 
-仅当用户在实时目录中明确选择 Seedance 2.5 时使用本节；其它模型不得套用这些限制或承诺。
-
-- 时长 4–30 秒（`duration` 整数或 `seconds` 字符串，二选一）
-- 分辨率：当前实时目录中的 Seedance 2.5 官方模型 ID 为 720p，插件据此提交 `720p`；本节所述 2.5 能力不支持 1080p/4k
-- `ratio`: `auto, 21:9, 16:9, 4:3, 1:1, 3:4, 9:16`（优先级高于 `size`）
-- `size`（可选，与 ratio 二选一、ratio 优先）：720P 三档 `1280x720`(横) / `720x1280`(竖) / `720x720`(方)
-- `generate_audio` 默认 true；`seed` 整数，-1 随机
-- 参考素材两种写法：`images`（图片简写数组）或 `input_reference`（string/string[]，素材 URL 或图片 Data URL）；含视频/音频参考时用多模态 `content[]`：`text` / `image_url`（≤30，**可用 base64 Data URL 传本地图**）/ `video_url`（≤10）/ `audio_url`（≤10）
-- **多模态参考合计 ≤50**（30 图 + 10 视频 + 10 音频）；官方建议**按职责组织**参考：人物 / 产品 / 场景 / 风格 / 运镜(参考视频) / 音乐情绪(参考音频)，并在提示词里逐条声明每个素材只负责哪一维
-- 视频与音频参考必须公网可直连 HTTP(S)，不能依赖 Cookie 或登录态；图床 403 时换对象存储
-- **图生视频（首帧/尾帧）CLI**：`video --first-frame <图> [--last-frame <图>]` → 插件自动走 `content[]` 并给每项打 `role`（`first_frame`/`last_frame`，附带的 `--identity-image` / `--image` 记为 `reference_image`）。用户指定授权真人时必须另加 `--identity-image <原照片>`，不能只提交 AI 首尾帧。**片头精确从首帧画面开始**；ratio 与关键帧匹配。
-
-## Seedance 2.5 原生能力 vs 88api 透传边界（2026-08 三档实测）
-
-官方（ByteDance / 即梦 Dreamina）Seedance 2.5 = 单段最长 **30 秒**、最多 **50 个多模态参考**的音视频模型。以下是**在 88api `/v1/videos` 上逐条实测**的透传结果（不是照抄官方文档）：
-
-| 能力 | 请求写法 | 88api 实测 |
-|---|---|---|
-| 中文台词→普通话配音 | `{台词}` + `generate_audio:true` | ✅ 生效 |
-| 多语言配音（英文等） | `{英语:…}` | ✅ 生效（标准发音） |
-| 声音语法 `()<>{}【】` | 写进提示词 | ✅ 接受并出声 |
-| 分辨率 480p | `resolution:480p` | ✅ 上游生效（854×480）；但插件统一 720p 交付、不暴露此档 |
-| 首帧图 | `content[].role:first_frame` | ✅ 生效 |
-| 首尾帧 | `first_frame`+`last_frame` | ✅ 生效（片头随首帧、片尾随尾帧） |
-| 视频参考（迁运镜） | `content[].role:reference_video` | ✅ 出片 |
-| 音频参考（卡节奏） | `content[].role:reference_audio` | ✅ 出片 |
-| 视频编辑 | `omni_reference_task_type:edit` | 🟡 可用但**约 50% 成功率，需容错重试** |
-| 视频延长 | `omni_reference_task_type:extend` | 🟡 可用（输出变长）**约 50% 成功率，需重试** |
-| **对口型（嘴型同步）** | — | ❌ **不支持**：原生台词只是配音/画外音，人物嘴不动 |
-| **mov 高保真输出** | `output_format:mov` | ❌ **被忽略**：统一回吐标准 mp4（isom/yuv420p） |
-| **水印开关** | `watermark:true` | ❌ **被忽略**：成片无水印 |
-
-**硬约束（插件已在 `buildVideoPayload` 前置校验）**：带**视频或音频参考时，必须同时提供至少 1 张图片参考**，否则上游 400 `video/audio reference requires at least one image reference`。即**无纯视频参考、无纯音频参考**——这是相对官方的一处缩水。
-
-**降级到即梦网页**（88api 不提供）：对口型、区域级局部编辑、白模控制、绿幕、4K、mov 高保真、强制水印——需要时产出可粘贴到即梦网页的提示词作降级。
-
-> 仅在选择 Seedance 2.5 时：≤30 秒优先单段直出，>30 秒才拆段拼接。其它模型必须使用实时目录中的单段上限。
-> edit/extend 若首次 `generation_failed`，**换新子目录重试最多 2 次**（失败自动退款）——这是上游不稳，不是提示词问题。
+Seedance 官方版和 SD2.5 销售型号都要按当前目录及上方标准协议提交。单段最长 30 秒，分辨率由具体型号决定；只有 SD2.5 明确支持音频开关。旧 `content[].role`、`omni_reference_task_type`、“视频参考必须搭配图片”等 2026-08 记录不是当前插件任务的请求契约。Ark 原生文档仅用于理解能力，不可直接作为 88API 请求体，也不能凭历史试验承诺 edit/extend 或失败退款。
 
 ## 任务生命周期
 
-`queued → in_progress → completed | failed`。完成后从 `video_url` 下载（**有有效期，立即下载**），`usage.seconds` 为计费秒数。
+`queued → in_progress → completed | failed`。完成后优先从 `url` 下载，兼容 `video_url` / `result_url`，完整保留返回的路径和查询参数，不拼接内容地址。媒体下载不携带 API Key。先保存 `result.json` 再下载，下载失败可续查原任务。若返回 `usage.seconds`，记录该用量；未返回时不得把估算冒充实际用量。
 
 - 轮询间隔 10–15 秒；客户端总超时 ≥20 分钟
 - Agent交互先用 `video --no-wait` 获取任务ID，立即告诉用户“任务已提交，正在监控，请耐心等待”，再调用 `status --wait`。状态未变化时CLI每约24秒输出一次监控心跳，不能让用户误以为卡死。
 - queued/in_progress 期间**不要重复提交**——会创建多个计费任务
-- 只有确认 POST 未到达服务器时才允许重试提交
+- 瞬时网络错误、429、5xx 只重试 GET 查询；未知提交结果保留 `run.json`，核对站点任务记录后处理，禁止自动创建第二个任务。
 
 ### 参考图提交审计
 
@@ -171,7 +146,7 @@ Image2 行保留 2026-08 实测记录；两个 Image 2.5 模型 ID 和 Images AP
 | 401 | Key 缺失/错误/失效，让用户重新 `--set-key` |
 | model_not_found | 模型名不对，或 Key 分组无视频模型权限（需 auto 分组或含视频分组） |
 | content moderated (nsfw) | 内容审核未通过：调整提示词/参考素材后重交 |
-| 参考素材 403 | 素材 URL 服务器无法直连：换图床/对象存储，图片改 Data URL |
+| 参考素材 403 | 素材 URL 服务器无法直连：换可匿名下载的 HTTPS 地址；本地图片由 CLI 上传，Veo 按专用 Base64 模式处理 |
 | no active tokens available / 任务超时 / turnstile_required | **88api 上游（即梦）令牌池暂时耗尽或触发人机验证——非本插件问题**。失败任务自动退款；生图接口通常仍可用（可先做设定图）。稍后用**新子目录**重试，切勿短时间连刷（每次失败虽退款，但会加剧上游拥塞） |
 | 进度长时间不动 | 上游分阶段更新，保持 10–15 秒轮询等最终状态 |
 

@@ -8,6 +8,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { createHash } from "node:crypto";
+import { DEFAULT_VIDEO_ADAPTER, VIDEO_MODEL_ADAPTERS, mergeVideoCapabilities, parseVideoPriceExpression, priceForVideoRequest, estimateVideoCost } from "./video-contract.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SCRIPT_DIR = dirname(SCRIPT_PATH);
@@ -31,39 +33,7 @@ const ENV = {
   accessToken: ["SEEDANCE_STUDIO_ACCESS_TOKEN", "RELAY_88API_ACCESS_TOKEN"],
   userId: ["SEEDANCE_STUDIO_USER_ID", "RELAY_88API_USER_ID"],
 };
-const VIDEO_ENDPOINT_TYPES = new Set(["openai-video", "video-generation"]);
-const DEFAULT_VIDEO_ADAPTER = Object.freeze({
-  name: "88api-unified-video",
-  createEndpoint: "/v1/videos",
-  statusEndpoint: "/v1/videos/{id}",
-  payloadKind: "unified",
-});
-const VIDEO_MODEL_ADAPTERS = Object.freeze({
-  "veo-3.1": Object.freeze({
-    ...DEFAULT_VIDEO_ADAPTER,
-    name: "88api-veo-3.1",
-    apiModelId: "veo-3.1",
-    payloadKind: "veo",
-    capabilities: Object.freeze({
-      textToVideo: true, imageReference: true, videoReference: false, audioReference: false,
-      firstLastFrame: false, generatedAudio: true, resolution: "1080p",
-      minDuration: 8, maxDuration: 8, defaultDuration: 8,
-      ratios: Object.freeze(["16:9", "9:16"]), maxImages: 2, maxVideos: 0, maxAudios: 0,
-    }),
-  }),
-  "veo-3.1-fast": Object.freeze({
-    ...DEFAULT_VIDEO_ADAPTER,
-    name: "88api-veo-3.1-fast",
-    apiModelId: "veo-3.1-fast",
-    payloadKind: "veo",
-    capabilities: Object.freeze({
-      textToVideo: true, imageReference: true, videoReference: false, audioReference: false,
-      firstLastFrame: false, generatedAudio: true, resolution: "1080p",
-      minDuration: 8, maxDuration: 8, defaultDuration: 8,
-      ratios: Object.freeze(["16:9", "9:16"]), maxImages: 2, maxVideos: 0, maxAudios: 0,
-    }),
-  }),
-});
+const VIDEO_ENDPOINT_TYPES = new Set(["openai-video", "openai_video", "video-generation"]);
 const AUTH_IDENTITY_VIDEO_LOCK = "【授权真人身份唯一基准】第一张普通参考图（不含首帧/尾帧）是用户明确授权使用的真人身份照片，只控制人物的脸、五官比例、发型、肤色、体型与稳定可见特征。首帧、尾帧及其它 AI 关键帧只控制场景、服装、构图和状态，不得改写人物身份；发生冲突时一律以该真人身份图为准。不要迁移身份图中的背景、镜面重复人物、文字、Logo 或无关物品。保留真实面部不对称、自然皮肤纹理与拍摄质感，禁止标准化美化和换脸。";
 const AUTH_IDENTITY_IMAGE_LOCK = "【授权真人身份唯一基准】第一张参考图是用户明确授权使用的真人身份照片，只控制人物的脸、五官比例、发型、肤色、体型与稳定可见特征。其它参考图只控制场景、服装、构图或风格，不得改写身份；发生冲突时一律以第一张身份图为准。保留真实面部不对称、自然皮肤纹理与拍摄质感，禁止标准化美化和换脸。";
 function withIdentityLock(prompt, lock) {
@@ -79,7 +49,7 @@ function monitorStartMessage(taskId) {
 function monitorHeartbeatMessage(status, progress, elapsedSeconds) {
   return "[monitor] 任务仍在 " + status + "（progress=" + (progress == null ? "?" : progress) + "%）· 已等待 " + elapsedSeconds + " 秒；Agent 仍在监控，请继续耐心等待。";
 }
-const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
+const RATIOS = ["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16", "3:2", "2:3"];
 // 尺寸表与参考插件 88api-image-gen 的 SIZE_MATRIX 完全一致（后端最长边上限 IMAGE_MAX_EDGE=3840，4K 档不是把 2K 翻倍）
 const IMG_ASPECTS = { "1:1":"2048x2048","3:2":"2048x1360","2:3":"1360x2048","4:3":"2048x1536","3:4":"1536x2048","16:9":"2048x1152","9:16":"1152x2048","2:1":"2048x1024","1:2":"1024x2048","7:4":"2208x1264","4:7":"1264x2208" };
 const IMG_ASPECTS_4K = { "1:1":"2880x2880","3:2":"3520x2352","2:3":"2352x3520","4:3":"3264x2448","3:4":"2448x3264","16:9":"3840x2160","9:16":"2160x3840","2:1":"3840x1920","1:2":"1920x3840","7:4":"3808x2176","4:7":"2176x3808" };
@@ -303,6 +273,8 @@ async function api(cfg, method, path, body) {
     method,
     headers: { Authorization: "Bearer " + requireKey(cfg), "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
+    signal: path.startsWith("/v1/videos") || path === "/v1/media/uploads"
+      ? AbortSignal.timeout(method === "GET" ? 30000 : 120000) : undefined,
   });
   const text = await res.text();
   let json; try { json = JSON.parse(text); } catch { json = { raw: text.slice(0, 500) }; }
@@ -310,6 +282,8 @@ async function api(cfg, method, path, body) {
     const msg = (json && json.error && json.error.message) || json.message || text.slice(0, 300);
     const err = new Error("HTTP " + res.status + ": " + msg);
     err.status = res.status; err.body = json;
+    const retryAfter = res.headers.get("retry-after");
+    err.retryAfterMs = retryAfter ? (/^\d+$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now()) : 0;
     throw err;
   }
   return json;
@@ -368,6 +342,7 @@ function listOf(value) {
 }
 function unique(values) { return [...new Set(values.filter(Boolean))]; }
 function finiteNumber(value, fallback = null) {
+  if (value == null || value === "") return fallback;
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
@@ -385,13 +360,13 @@ function inferVideoCapabilities(row) {
   const durationMatch = text.match(/(\d+)\s*[–—~\-]\s*(\d+)\s*秒/i);
   const maxDurationMatch = text.match(/(?:最大支持|最长(?:支持)?|支持)\s*(\d+)\s*秒/i);
   const defaultDurationMatch = text.match(/默认\s*(\d+)\s*秒/i);
-  const ratios = unique(text.match(/(?:21:9|16:9|9:16|1:1|4:3|3:4)/g) || []);
+  const ratios = unique(text.match(/(?:auto|21:9|16:9|9:16|1:1|4:3|3:4|3:2|2:3)/g) || []);
   const maxImages = finiteNumber((text.match(/最多\s*(\d+)\s*张参考图/i) || [])[1]);
-  const maxVideos = finiteNumber((text.match(/(?:最多\s*)?(\d+)\s*个参考视频/i) || [])[1]);
-  const maxAudios = finiteNumber((text.match(/(?:最多\s*)?(\d+)\s*个参考音频/i) || [])[1]);
+  const maxVideos = finiteNumber((text.match(/(?:最多\s*)?(\d+)\s*(?:个|段)参考视频/i) || [])[1]);
+  const maxAudios = finiteNumber((text.match(/(?:最多\s*)?(\d+)\s*(?:个|段)参考音频/i) || [])[1]);
   const noImageReference = /不提供参考图|无参考轻量版/i.test(text);
-  const noVideoReference = /不提供[^。；]*参考视频|无参考轻量版/i.test(text);
-  const noAudioReference = /不提供[^。；]*参考音频|无参考轻量版/i.test(text);
+  const noVideoReference = /(?:不提供|不支持)[^。；]*参考视频|无参考轻量版/i.test(text);
+  const noAudioReference = /(?:不提供|不支持)[^。；]*参考音频|无参考轻量版/i.test(text);
   const yesImageReference = /图生视频|参考图|图片[^。；]*生成视频|多图参考|支持文本、图片/i.test(text);
   const yesVideoReference = /参考视频|支持[^。；]*视频输入/i.test(text);
   const yesAudioReference = /参考音频|支持[^。；]*音频/i.test(text);
@@ -401,7 +376,9 @@ function inferVideoCapabilities(row) {
     imageReference: supportValue(yesImageReference, noImageReference),
     videoReference: supportValue(yesVideoReference, noVideoReference),
     audioReference: supportValue(yesAudioReference, noAudioReference),
-    firstLastFrame: /首尾帧/i.test(text) ? true : null,
+    firstLastFrame: /不支持首尾帧/.test(text) ? false : /首尾帧|首帧和尾帧/i.test(text) ? true : null,
+    framesExclusive: /首尾帧[^。；]*(?:不可|不能|互斥)/.test(text),
+    maxTotalMedia: finiteNumber((text.match(/合计(?:不超过|最多)\s*(\d+)\s*个/) || [])[1]),
     generatedAudio: /音效生成|同步音频|带音频|预设语音|seedance-2\.5/i.test(text) ? true : null,
     resolution: inferResolution(modelName, description),
     minDuration: durationMatch ? Number(durationMatch[1]) : null,
@@ -423,9 +400,19 @@ function normalizeVideoPrice(row, pricing, status) {
   const group = pickAutoGroup(row, pricing);
   const multiplier = finiteNumber(pricing.group_ratio && pricing.group_ratio[group], 1);
   const currency = String((status.data && status.data.quota_display_type) || "CNY");
+  if (billingMode === "tiered_expr") {
+    const expression = String(row.billing_expr || "");
+    const parsed = parseVideoPriceExpression(expression);
+    const price = { billingMode, currency, unit: parsed ? "second" : "unknown", base: null,
+      multiplier, effective: null, group, expression, usageSchema: row.billing_usage_schema || {},
+      ...(parsed || {}) };
+    const normalized = priceForVideoRequest(price, "");
+    delete normalized.tier;
+    return normalized;
+  }
   if (Number(row.quota_type) === 1 || billingMode === "per_second" || finiteNumber(row.model_price, 0) > 0) {
     const base = finiteNumber(row.model_price, 0);
-    const unit = billingMode === "per_second" ? "second" : "request";
+    const unit = billingMode === "per_second" || row.billing_unit === "second" ? "second" : "request";
     return { billingMode, currency, unit, base, multiplier, effective: base * multiplier, group };
   }
   const quotaPerUnit = finiteNumber(status.data && status.data.quota_per_unit, 500000);
@@ -435,7 +422,9 @@ function normalizeVideoPrice(row, pricing, status) {
 function isVideoCatalogRow(row) {
   const groups = listOf(row.enable_groups || row.enable_group);
   const endpoints = listOf(row.supported_endpoint_types);
-  return groups.includes("视频模型") || endpoints.some((x) => VIDEO_ENDPOINT_TYPES.has(x)) || /视频|video/i.test(String(row.description || ""));
+  return groups.includes("视频模型") || endpoints.some((x) => VIDEO_ENDPOINT_TYPES.has(x))
+    || Boolean(explicitVideoAdapter(row.model_name))
+    || /文生视频|图生视频|视频生成模型|video generation/i.test(String(row.description || ""));
 }
 function explicitVideoAdapter(modelId) {
   const id = String(modelId || "");
@@ -449,7 +438,9 @@ function videoAdapterForRow(row) {
   const catalogId = String(row.model_name || "");
   const explicit = explicitVideoAdapter(catalogId);
   if (explicit) return explicit;
-  if (!listOf(row.supported_endpoint_types).some((x) => VIDEO_ENDPOINT_TYPES.has(x))) return null;
+  const taskVideo = listOf(row.enable_groups || row.enable_group).includes("视频模型")
+    && row.billing_usage_schema?.seconds?.unit === "second";
+  if (!taskVideo && !listOf(row.supported_endpoint_types).some((x) => VIDEO_ENDPOINT_TYPES.has(x))) return null;
   return { catalogId, apiModelId: catalogId, ...DEFAULT_VIDEO_ADAPTER };
 }
 function statusEndpointFor(adapter, taskId) {
@@ -540,7 +531,7 @@ async function fetchVideoCatalog(cfg, options = {}) {
         createEndpoint: adapter.createEndpoint,
         statusEndpoint: adapter.statusEndpoint,
       } : null,
-      capabilities: { ...inferVideoCapabilities(row), ...((adapter && adapter.capabilities) || {}) },
+      capabilities: mergeVideoCapabilities(inferVideoCapabilities(row), adapter?.capabilities),
     };
   }).sort((a, b) => Number(b.selectable) - Number(a.selectable)
     || Number(b.endpointCompatible) - Number(a.endpointCompatible)
@@ -556,13 +547,16 @@ async function fetchVideoCatalog(cfg, options = {}) {
   };
 }
 function money(value, currency) {
-  if (!Number.isFinite(Number(value))) return "未知";
+  if (value == null || !Number.isFinite(Number(value))) return "未知";
   const prefix = String(currency).toUpperCase() === "CNY" ? "¥" : String(currency) + " ";
-  return prefix + Number(value).toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+  return prefix + Number(value).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
 }
 function priceLabel(price) {
+  if (price.effective == null) return "价格表达式暂无法估算（不会按 Token 价格代替）";
   const unit = price.unit === "second" ? "秒" : price.unit === "request" ? "次" : "百万输入 Token";
-  return money(price.effective, price.currency) + "/" + unit + (price.multiplier !== 1 ? "（" + price.group + " ×" + price.multiplier + "）" : "");
+  const tiers = !price.tier && price.rates?.length > 1 ? price.rates.map((r) => r.base * price.multiplier) : [];
+  const amount = tiers.length ? money(Math.min(...tiers), price.currency) + "–" + money(Math.max(...tiers), price.currency) : money(price.effective, price.currency);
+  return amount + "/" + unit + (price.multiplier !== 1 ? "（" + price.group + " ×" + price.multiplier + "）" : "");
 }
 function modelSummary(model) {
   const c = model.capabilities;
@@ -766,102 +760,202 @@ async function selectedVideoModel(cfg, args) {
 // ---------- video ----------
 function buildVideoPayload(cfg, args, modelInfo) {
   let prompt = args.prompt ? String(args.prompt) : "";
-  const capabilities = modelInfo.capabilities || {};
-  const minDuration = capabilities.minDuration;
-  const maxDuration = capabilities.maxDuration;
-  const defaultDuration = capabilities.defaultDuration;
-  if (args.duration === undefined && defaultDuration == null) {
-    die("模型 " + modelInfo.id + " 的实时目录没有提供默认时长；请根据目录说明让用户明确给出 --duration，插件不会猜测。");
+  const c = modelInfo.capabilities || {};
+  const kind = modelInfo.adapter?.payloadKind || "unified";
+  if (args.duration === undefined && c.defaultDuration == null) {
+    die("模型 " + modelInfo.id + " 的实时目录没有提供默认时长；请明确给出 --duration。");
   }
-  const duration = args.duration !== undefined ? parseInt(args.duration, 10) : defaultDuration;
-  if (!Number.isInteger(duration) || duration <= 0) die("duration 必须是正整数秒，当前: " + args.duration);
-  if (minDuration != null && duration < minDuration) die("模型 " + modelInfo.id + " 的最短时长为 " + minDuration + " 秒，当前: " + duration);
-  if (maxDuration != null && duration > maxDuration) die("模型 " + modelInfo.id + " 的最长时长为 " + maxDuration + " 秒，当前: " + duration);
+  if (args.duration !== undefined && !["string", "number"].includes(typeof args.duration)) die("duration 必须是正整数秒");
+  const duration = args.duration !== undefined ? Number(args.duration) : c.defaultDuration;
+  if (!Number.isSafeInteger(duration) || duration <= 0) die("duration 必须是正整数秒，当前: " + args.duration);
+  if (c.minDuration != null && duration < c.minDuration) die("模型 " + modelInfo.id + " 的最短时长为 " + c.minDuration + " 秒，当前: " + duration);
+  if (c.maxDuration != null && duration > c.maxDuration) die("模型 " + modelInfo.id + " 的最长时长为 " + c.maxDuration + " 秒，当前: " + duration);
+  if (c.durations && !c.durations.includes(duration)) die("该模型仅支持 " + c.durations.join("/") + " 秒");
   const ratio = String(args.ratio || "16:9");
-  if (!RATIOS.includes(ratio)) die("ratio 仅支持: " + RATIOS.join(", "));
-  if (capabilities.ratios && capabilities.ratios.length && !capabilities.ratios.includes(ratio)) {
-    die("模型 " + modelInfo.id + " 当前目录声明的 ratio 仅支持: " + capabilities.ratios.join(", "));
+  if (!RATIOS.includes(ratio) || (c.ratios?.length && !c.ratios.includes(ratio))) {
+    die("模型 " + modelInfo.id + " 的 ratio 仅支持: " + (c.ratios?.length ? c.ratios : RATIOS).join(", "));
+  }
+  const resolution = String(args.resolution || c.resolution || "").toLowerCase();
+  if (args.resolution && (c.resolutions ? !c.resolutions.includes(resolution) : !c.resolution || resolution !== c.resolution)) {
+    die("模型 " + modelInfo.id + " 不支持该分辨率；按模型档位选择，不得用 resolution 覆盖销售型号。");
   }
   const identityImages = asArray(args["identity-image"]).map(String);
   const regularImages = asArray(args.image).map(String);
-  if (identityImages.length > 1) die("--identity-image 当前只允许 1 张授权真人身份图，避免多个身份权威互相冲突");
+  if (identityImages.length > 1) die("--identity-image 只允许 1 张授权真人身份图");
   if (identityImages.length) {
-    const identityKey = /^https?:\/\//.test(identityImages[0]) ? identityImages[0] : resolve(identityImages[0]).toLowerCase();
-    const duplicated = regularImages.some((p) => (/^https?:\/\//.test(p) ? p : resolve(p).toLowerCase()) === identityKey);
-    if (duplicated) die("授权真人身份图不要同时作为 --identity-image 和 --image 重复提交");
-    if (!/^https?:\/\//.test(identityImages[0]) && !existsSync(resolve(identityImages[0]))) die("授权真人身份图不存在: " + identityImages[0]);
+    const key = (p) => /^https?:\/\//.test(p) ? p : resolve(p).toLowerCase();
+    if (regularImages.some((p) => key(p) === key(identityImages[0]))) die("授权真人身份图不要同时作为 --identity-image 和 --image 重复提交");
     prompt = withIdentityLock(prompt, AUTH_IDENTITY_VIDEO_LOCK);
   }
   const images = [...identityImages, ...regularImages];
-  const videoUrls = asArray(args["video-url"]);
-  const audioUrls = asArray(args["audio-url"]);
+  const videoUrls = asArray(args["video-url"]).map(String);
+  const audioUrls = asArray(args["audio-url"]).map(String);
   const firstFrame = args["first-frame"] ? String(args["first-frame"]) : "";
   const lastFrame = args["last-frame"] ? String(args["last-frame"]) : "";
-  const maxImages = capabilities.maxImages ?? 30;
-  const maxVideos = capabilities.maxVideos ?? 10;
-  const maxAudios = capabilities.maxAudios ?? 10;
-  if (images.length > maxImages) die("模型 " + modelInfo.id + " 的图片参考最多 " + maxImages + " 张（含 --identity-image）");
-  if (videoUrls.length > maxVideos) die("模型 " + modelInfo.id + " 的视频参考最多 " + maxVideos + " 个");
-  if (audioUrls.length > maxAudios) die("模型 " + modelInfo.id + " 的音频参考最多 " + maxAudios + " 个");
-  if ((images.length || firstFrame || lastFrame) && capabilities.imageReference === false) die("模型 " + modelInfo.id + " 的当前目录明确不支持图片参考/图生视频");
-  if (videoUrls.length && capabilities.videoReference === false) die("模型 " + modelInfo.id + " 的当前目录明确不支持参考视频");
-  if (audioUrls.length && capabilities.audioReference === false) die("模型 " + modelInfo.id + " 的当前目录明确不支持参考音频");
-  if ((firstFrame || lastFrame) && capabilities.firstLastFrame === false) die("模型 " + modelInfo.id + " 的当前目录明确不支持首尾帧");
-  for (const u of [...videoUrls, ...audioUrls]) {
-    if (!/^https?:\/\//.test(u)) die("视频/音频参考必须是公网 http(s) URL（本地文件不支持，需先上传对象存储）: " + u);
+  const frameCount = Number(Boolean(firstFrame)) + Number(Boolean(lastFrame));
+  if (lastFrame && !firstFrame) die("尾帧必须同时提供首帧（--first-frame）");
+  if ((images.length || frameCount) && c.imageReference === false) die("模型 " + modelInfo.id + " 的当前目录明确不支持图片参考/图生视频");
+  if (videoUrls.length && c.videoReference !== true) die("模型 " + modelInfo.id + " 未声明支持参考视频");
+  if (audioUrls.length && c.audioReference !== true) die("模型 " + modelInfo.id + " 未声明支持参考音频");
+  if (frameCount && c.firstLastFrame !== true && !(c.firstFrameOnly && !lastFrame)) die("模型 " + modelInfo.id + " 的当前目录明确不支持首尾帧");
+  if (c.framesExclusive && frameCount && (images.length || videoUrls.length || audioUrls.length)) {
+    die("该模型的首尾帧与普通参考素材互斥。保留 --identity-image 时请使用普通参考模式，不能混入首尾帧，也不能丢弃身份图。");
   }
-  const hasImageAnchor = images.length || firstFrame || lastFrame;
-  const requireImage = Boolean(args["require-image"] || promptRequiresImageReference(prompt));
-  if (requireImage && !hasImageAnchor) {
-    die("参考图审计失败：本任务要求图片参考，但请求中没有 --image / --identity-image / --first-frame / --last-frame。未提交付费任务。");
+  const imageCount = images.length + ((c.framesCountAsImages || c.firstFrameOnly) ? frameCount : 0);
+  for (const [count, max, label] of [[imageCount, c.maxImages, "图片"], [videoUrls.length, c.maxVideos, "视频"], [audioUrls.length, c.maxAudios, "音频"]]) {
+    if (max != null && count > max) die("模型 " + modelInfo.id + " 的" + label + "参考最多 " + max + " 个");
   }
-  // 实测硬约束（88api 后端）：带视频/音频参考时必须至少配 1 张图片参考（首帧/尾帧也算），
-  // 否则上游直接 400: "video/audio reference requires at least one image reference"。
-  // 这里前置拦截，省掉一次无谓的失败提交。
-  if (/seedance-2\.5/i.test(modelInfo.id) && (videoUrls.length || audioUrls.length) && !hasImageAnchor) {
-    die("88api 约束：使用视频/音频参考时必须同时提供至少 1 张图片参考（--image / --first-frame <图>）。\n纯视频参考或纯音频参考在本后端不支持——请补一张锚定图/关键帧一起提交。");
+  if (c.maxTotalMedia != null && images.length + frameCount + videoUrls.length + audioUrls.length > c.maxTotalMedia) die("参考素材合计最多 " + c.maxTotalMedia + " 个");
+  if (c.audioRequiresVisual && audioUrls.length && !images.length && !frameCount && !videoUrls.length) die("该模型的参考音频需要同时提供图片或视频");
+  if ((args["require-image"] || promptRequiresImageReference(prompt)) && !images.length && !frameCount) {
+    die("参考图审计失败：请求中没有 --image / --identity-image / --first-frame / --last-frame。未提交付费任务。");
   }
-  if (!prompt) die("需要 --prompt 提示词");
-  const toUrl = p => /^https?:\/\//.test(p) ? p : imageToDataUrl(resolve(p));
-  if (modelInfo.adapter && modelInfo.adapter.payloadKind === "veo") {
-    const payload = {
-      model: modelInfo.id,
-      prompt,
-      duration,
-      size: ratio === "9:16" ? "1080x1920" : "1920x1080",
-    };
-    if (images.length) payload.images = images.map((p) => toUrl(p));
-    return payload;
+  if (args.audio && args["no-audio"]) die("--audio 与 --no-audio 不能同时使用");
+  if ((args.audio || args["no-audio"]) && c.audioControl !== true) die("该模型不支持音频开关，请移除 --audio / --no-audio；输出音轨由模型决定。");
+  if (args.seed !== undefined && !["string", "number"].includes(typeof args.seed)) die("seed 必须是整数");
+  const seed = args.seed === undefined ? undefined : Number(args.seed);
+  if (seed !== undefined && !Number.isSafeInteger(seed)) die("seed 必须是整数");
+  if (!prompt.trim()) die("需要 --prompt 提示词");
+  for (const u of [...videoUrls, ...audioUrls]) assertPublicMediaUrl(u);
+  const ref = (p) => {
+    if (/^https?:\/\//.test(p)) { assertPublicMediaUrl(p); return p; }
+    const path = resolve(p);
+    if (!existsSync(path) || !statSync(path).isFile()) die("参考图片不存在: " + path);
+    if (!MIME[extname(path).toLowerCase()]) die("图片需要 PNG/JPEG/WebP/GIF: " + path);
+    // Resolved only after dry-run and duplicate/price checks, never sent as-is.
+    return { localImage: path };
+  };
+  const payload = { model: modelInfo.id, prompt, duration, size: ratio };
+  const metadata = {};
+  if (kind === "veo") {
+    const pixels = resolution === "720p" ? [1280, 720] : [1920, 1080];
+    payload.size = (ratio === "9:16" ? pixels.reverse() : pixels).join("x");
+    const mode = String(args["video-mode"] || (frameCount ? "frames" : "reference"));
+    if (!["frames", "reference"].includes(mode)) die("Veo video-mode 仅支持 frames/reference");
+    if (frameCount && mode !== "frames") die("Veo 首尾帧需要 video-mode=frames");
+    const refs = frameCount ? [firstFrame, lastFrame].filter(Boolean) : images;
+    if (refs.length) {
+      if (refs.length > (mode === "frames" ? 2 : 3)) die("Veo " + mode + " 模式参考图数量超限");
+      if (mode === "reference" && duration !== 8) die("Veo reference 模式有参考图时必须 8 秒");
+      payload.images = refs.map(ref);
+      metadata.video_mode = mode;
+    }
+    if (seed !== undefined) metadata.seed = seed;
+    if (args.audio || args["no-audio"]) metadata.generateAudio = !args["no-audio"];
+    if (args["negative-prompt"]) metadata.negativePrompt = String(args["negative-prompt"]);
+  } else {
+    if (args["video-mode"]) die("--video-mode 仅用于 Veo");
+    if (images.length) payload.images = images.map(ref);
+    if (c.firstFrameOnly && firstFrame) payload.images = [...(payload.images || []), ref(firstFrame)];
+    else {
+      if (firstFrame) metadata.firstFrame = ref(firstFrame);
+      if (lastFrame) metadata.lastFrame = ref(lastFrame);
+    }
+    if (kind === "omni" && videoUrls.length) payload.video = videoUrls[0];
+    else if (videoUrls.length) metadata.referenceVideos = videoUrls;
+    if (audioUrls.length) metadata.referenceAudios = audioUrls;
+    if (kind === "grok" && !modelInfo.id.endsWith("-1080p")) metadata.resolution = resolution;
+    if (seed !== undefined) payload.seed = seed;
+    if (args.audio || args["no-audio"]) payload.generate_audio = !args["no-audio"];
+    if (args["negative-prompt"]) payload.negative_prompt = String(args["negative-prompt"]);
   }
-  const payload = { model: modelInfo.id, duration, ratio };
-  if (args["no-audio"]) payload.generate_audio = false;
-  else if (args.audio || capabilities.generatedAudio === true) payload.generate_audio = true;
-  if (["480p", "720p", "1080p", "2k", "4k"].includes(capabilities.resolution)) payload.resolution = capabilities.resolution;
-  if (args.seed !== undefined) payload.seed = parseInt(args.seed, 10);
-  const hasMulti = images.length || videoUrls.length || audioUrls.length || firstFrame || lastFrame;
-  payload.prompt = prompt;
-  // 实测：上游要求顶层 prompt 必填。
-  // ① 带首帧/尾帧（图生视频）→ 必须走 content[] 并给每项打 role（first_frame/last_frame/reference_*），首帧决定片头画面。
-  // ② 仅普通图片参考（无首尾帧、无视频/音频）→ 用 images 简写（最稳路径）。
-  // ③ 其它含视频/音频参考的多模态情况 → content 数组（不打 role，沿用历史稳定写法）。
-  if (firstFrame || lastFrame) {
-    const content = [{ type: "text", text: prompt }];
-    if (firstFrame) content.push({ type: "image_url", role: "first_frame", image_url: { url: toUrl(firstFrame) } });
-    if (lastFrame) content.push({ type: "image_url", role: "last_frame", image_url: { url: toUrl(lastFrame) } });
-    for (const p of images) content.push({ type: "image_url", role: "reference_image", image_url: { url: toUrl(p) } });
-    for (const u of videoUrls) content.push({ type: "video_url", role: "reference_video", video_url: { url: u } });
-    for (const u of audioUrls) content.push({ type: "audio_url", role: "reference_audio", audio_url: { url: u } });
-    payload.content = content;
-  } else if (images.length && !videoUrls.length && !audioUrls.length) {
-    payload.images = images.map(p => toUrl(p));
-  } else if (hasMulti) {
-    const content = [{ type: "text", text: prompt }];
-    for (const p of images) content.push({ type: "image_url", image_url: { url: toUrl(p) } });
-    for (const u of videoUrls) content.push({ type: "video_url", video_url: { url: u } });
-    for (const u of audioUrls) content.push({ type: "audio_url", audio_url: { url: u } });
-    payload.content = content;
-  }
+  if (Object.keys(metadata).length) payload.metadata = metadata;
   return payload;
+}
+
+function assertPublicMediaUrl(value) {
+  let url;
+  try { url = new URL(value); } catch { die("参考素材必须是公网 HTTPS 直链: " + value); }
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (url.protocol !== "https:" || url.username || url.password || host === "localhost" || host.endsWith(".localhost")
+    || /^(?:127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(host)
+    || host === "::1" || host === "::" || /^(?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f]):/i.test(host)) {
+    die("参考素材必须是匿名可下载的公网 HTTPS 直链（不能是本机、私网或 HTTP）");
+  }
+}
+
+function imageMime(bytes) {
+  if (bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) return "image/png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  if (/^GIF8[79]a$/.test(bytes.toString("ascii", 0, 6))) return "image/gif";
+  die("参考图文件内容不是受支持的图片格式");
+}
+
+async function uploadVideoImage(cfg, path) {
+  const size = statSync(path).size;
+  if (size < 1 || size > 100000000) die("上传素材必须为 1–100,000,000 字节");
+  const bytes = readFileSync(path);
+  const mime = imageMime(bytes);
+  const permit = await api(cfg, "POST", "/v1/media/uploads", {
+    size: bytes.length, mime_type: mime, sha256: createHash("sha256").update(bytes).digest("base64url"),
+  });
+  // Upload credentials are scoped to this asset. Never forward the API Key.
+  const target = new URL(permit.upload_url);
+  const publicUrl = new URL(permit.url);
+  if (target.origin !== "https://assets.88api.ai" || publicUrl.origin !== target.origin || target.username || target.password
+    || publicUrl.username || publicUrl.password || permit.method !== "PUT" || !permit.headers?.["X-Media-Upload-Token"]
+    || permit.headers?.["Content-Type"] !== mime || Object.keys(permit.headers).some((h) => !["content-type", "x-media-upload-token"].includes(h.toLowerCase()))) {
+    die("素材上传凭证的地址或请求头不符合 88API 规范");
+  }
+  const checkExisting = async () => {
+    const head = await fetch(permit.url, { method: "HEAD", redirect: "error", signal: AbortSignal.timeout(30000) });
+    return head.ok && Number(head.headers.get("content-length")) === bytes.length;
+  };
+  let response;
+  try {
+    response = await fetch(permit.upload_url, { method: "PUT", headers: { ...permit.headers, "Content-Length": String(bytes.length) },
+      body: bytes, redirect: "error", signal: AbortSignal.timeout(120000) });
+  } catch (error) {
+    if (await checkExisting().catch(() => false)) return permit.url;
+    throw new Error("素材上传结果不确定，未创建视频任务: " + error.message);
+  }
+  if (response.status === 409 && await checkExisting()) return permit.url;
+  if (response.status !== 201) die("素材上传失败 HTTP " + response.status + "；未创建视频任务");
+  const uploaded = await response.json();
+  if (uploaded.url !== permit.url) die("素材上传返回了与凭证不一致的结果地址");
+  return uploaded.url;
+}
+
+async function prepareVideoMedia(cfg, payload, adapter) {
+  const prepared = structuredClone(payload);
+  const cache = new Map();
+  const resolveRef = async (ref) => {
+    const local = ref && typeof ref === "object" && ref.localImage;
+    const key = local || ref;
+    if (cache.has(key)) return cache.get(key);
+    let result = ref;
+    if (adapter.payloadKind === "veo") {
+      let bytes;
+      if (local) {
+        if (statSync(local).size > 20 * 1024 * 1024) die("Veo 参考图片不能超过 20 MiB");
+        bytes = readFileSync(local);
+      } else {
+        assertPublicMediaUrl(ref);
+        const response = await fetch(ref, { signal: AbortSignal.timeout(60000) });
+        if (!response.ok) die("Veo 参考图片下载失败 HTTP " + response.status);
+        const chunks = []; let size = 0;
+        for await (const chunk of response.body) {
+          size += chunk.length;
+          if (size > 20 * 1024 * 1024) die("Veo 参考图片不能超过 20 MiB");
+          chunks.push(chunk);
+        }
+        bytes = Buffer.concat(chunks);
+      }
+      const mime = imageMime(bytes);
+      if (!["image/png", "image/jpeg"].includes(mime)) die("Veo 显式图片模式仅支持 PNG/JPEG");
+      result = "data:" + mime + ";base64," + bytes.toString("base64");
+    } else if (local) result = await uploadVideoImage(cfg, local);
+    cache.set(key, result);
+    return result;
+  };
+  if (prepared.images) {
+    for (let i = 0; i < prepared.images.length; i++) prepared.images[i] = await resolveRef(prepared.images[i]);
+  }
+  for (const key of ["firstFrame", "lastFrame"]) {
+    if (prepared.metadata?.[key]) prepared.metadata[key] = await resolveRef(prepared.metadata[key]);
+  }
+  return prepared;
 }
 function buildReferenceAudit(args, payload) {
   const imageInputs = asArray(args.image).map(String);
@@ -869,7 +963,7 @@ function buildReferenceAudit(args, payload) {
   const contentImages = Array.isArray(payload.content) ? payload.content.filter((item) => item && item.type === "image_url").length : 0;
   return {
     imageRequired: Boolean(args["require-image"] || promptRequiresImageReference(payload.prompt)),
-    imageCount: Array.isArray(payload.images) ? payload.images.length : contentImages,
+    imageCount: (Array.isArray(payload.images) ? payload.images.length : contentImages) + Number(Boolean(payload.metadata?.firstFrame)) + Number(Boolean(payload.metadata?.lastFrame)),
     identityImageCount: identityInputs.length,
     firstFrame: Boolean(args["first-frame"]),
     lastFrame: Boolean(args["last-frame"]),
@@ -880,7 +974,7 @@ function buildReferenceAudit(args, payload) {
 }
 function sanitizePayload(p) {
   const clone = JSON.parse(JSON.stringify(p));
-  if (clone.images) clone.images = clone.images.map(u => u.startsWith("data:") ? "data:<base64 " + (u.length/1366).toFixed(0) + "KB omitted>" : u);
+  if (clone.images) clone.images = clone.images.map(u => typeof u === "string" && u.startsWith("data:") ? "data:<base64 " + (u.length/1366).toFixed(0) + "KB omitted>" : u);
   if (clone.content) for (const c of clone.content) {
     if (c.image_url && c.image_url.url && c.image_url.url.startsWith("data:")) {
       c.image_url.url = "data:<base64 " + (c.image_url.url.length/1366).toFixed(0) + "KB omitted>";
@@ -892,10 +986,21 @@ async function pollTask(cfg, taskId, dir, adapter = DEFAULT_VIDEO_ADAPTER) {
   const started = Date.now();
   let lastStatus = "";
   let lastHeartbeat = 0;
+  let retries = 0;
   log(monitorStartMessage(taskId));
   while (true) {
     if (Date.now() - started > cfg.pollTimeoutMs) die("轮询超时（" + (cfg.pollTimeoutMs / 60000) + " 分钟）。任务可能仍在进行，稍后续查:\n  node studio.mjs status --task " + taskId + ' --wait --out "' + dir + '"');
-    const st = await api(cfg, "GET", statusEndpointFor(adapter, taskId));
+    let st;
+    try {
+      st = await api(cfg, "GET", statusEndpointFor(adapter, taskId));
+      retries = 0;
+    } catch (error) {
+      if (error.status && error.status !== 429 && error.status < 500) throw error;
+      const delay = Math.min(60000, Math.max(cfg.pollIntervalMs, error.retryAfterMs || cfg.pollIntervalMs * 2 ** Math.min(++retries, 3)));
+      log("[monitor] 查询暂时失败，将继续查询原任务 " + taskId + "；不会重新提交。" + error.message);
+      await new Promise((r) => setTimeout(r, Math.max(0, Math.min(delay, cfg.pollTimeoutMs - (Date.now() - started)))));
+      continue;
+    }
     const line = st.status + " progress=" + (st.progress == null ? "?" : st.progress) + "%";
     const now = Date.now();
     const elapsedSeconds = Math.round((now - started) / 1000);
@@ -908,34 +1013,41 @@ async function pollTask(cfg, taskId, dir, adapter = DEFAULT_VIDEO_ADAPTER) {
       lastHeartbeat = now;
     }
     if (st.status === "completed") {
-      if (!st.video_url) die("任务完成但未返回 video_url，原始响应: " + JSON.stringify(st).slice(0, 400));
-      const dest = join(dir, "video_" + taskId.slice(-8) + ".mp4");
-      log("[download] " + st.video_url.slice(0, 80) + "...");
-      await download(st.video_url, dest);
+      // Persist the terminal state even if downloading subsequently fails.
       writeFileSync(join(dir, "result.json"), JSON.stringify(st, null, 2));
+      const resultUrl = st.url || st.video_url || st.result_url;
+      if (typeof resultUrl !== "string" || !/^https?:\/\//.test(resultUrl)) die("任务完成但未返回 url/video_url/result_url，请续查原任务，不要重交。");
+      const dest = join(dir, "video_" + taskId.slice(-8) + ".mp4");
+      log("[download] 正在下载任务返回的视频地址");
+      await download(resultUrl, dest);
       log("[monitor] 任务已完成，正在交付下载结果。");
       log("[DONE] 视频已保存: " + dest);
       if (st.usage) log("[usage] " + JSON.stringify(st.usage));
       return dest;
     }
-    if (st.status === "failed") die("生成失败: " + ((st.error && st.error.message) || JSON.stringify(st).slice(0, 400)) + "\n[NO-RETRY] 请先诊断原因，不要盲目重交（重交会再次计费）。");
+    if (st.status === "failed") {
+      writeFileSync(join(dir, "result.json"), JSON.stringify(st, null, 2));
+      die("生成失败: " + ((st.error && st.error.message) || JSON.stringify(st).slice(0, 400)) + "\n[NO-RETRY] 请先诊断原因，不要盲目重交（重交会再次计费）。");
+    }
+    if (!["queued", "in_progress", "unknown"].includes(st.status)) die("任务 " + taskId + " 返回未识别状态，请保留任务 ID 续查: " + st.status);
     await new Promise(r => setTimeout(r, cfg.pollIntervalMs));
   }
 }
 async function cmdVideo(cfg, args) {
   const [{ model, catalog }, account] = await Promise.all([selectedVideoModel(cfg, args), fetchAccount(cfg)]);
   if (Number(account.status) !== 1) die("88API 账户当前不是正常状态（status=" + account.status + "），未提交付费任务。");
-  const payload = buildVideoPayload(cfg, args, model);
+  let payload = buildVideoPayload(cfg, args, model);
   const referenceAudit = buildReferenceAudit(args, payload);
   const adapter = model.adapter || DEFAULT_VIDEO_ADAPTER;
   const createEndpoint = adapter.createEndpoint || DEFAULT_VIDEO_ADAPTER.createEndpoint;
   const dir = outDir(args);
-  const estimatedCost = model.price.unit === "second" ? model.price.effective * payload.duration
-    : model.price.unit === "request" ? model.price.effective : null;
+  const requestResolution = String(args.resolution || model.capabilities.resolution || "").toLowerCase();
+  const requestPrice = priceForVideoRequest(model.price, requestResolution);
+  const estimatedCost = estimateVideoCost(requestPrice, payload.duration);
   if (estimatedCost != null && account.balance < estimatedCost) {
     die("88API 余额不足：当前 " + money(account.balance, account.currency) + "，本次估算 " + money(estimatedCost, model.price.currency) + "。未提交付费任务。");
   }
-  const catalogAudit = { retrievedAt: catalog.retrievedAt, pricingVersion: catalog.pricingVersion, model: model.id, catalogId: model.catalogId, adapter, price: model.price, availability: model.availability, balanceBefore: account.balance, balanceCurrency: account.currency };
+  const catalogAudit = { retrievedAt: catalog.retrievedAt, pricingVersion: catalog.pricingVersion, model: model.id, catalogId: model.catalogId, adapter, price: requestPrice, availability: model.availability, balanceBefore: account.balance, balanceCurrency: account.currency };
   const identitySources = asArray(args["identity-image"]).map(String).map((p) => /^https?:\/\//.test(p) ? p : resolve(p));
   const identityAudit = identitySources.length ? { mode: "authorized-direct", authority: "source-photo", sources: identitySources } : { mode: "generated-or-unspecified", sources: [] };
   if (identitySources.length) log("[IDENTITY] 授权真人原图已作为唯一身份权威直接附加；AI 首尾帧不得改写身份");
@@ -946,30 +1058,42 @@ async function cmdVideo(cfg, args) {
     log("[REFERENCE-AUDIT] " + JSON.stringify(referenceAudit));
     log(JSON.stringify(sanitizePayload(payload), null, 2));
     log("[模型] " + model.id + " · " + modelSummary(model));
-    log("[价格] " + priceLabel(model.price) + " · 目录版本 " + catalog.pricingVersion);
+    log("[价格] " + priceLabel(requestPrice) + " · 目录版本 " + catalog.pricingVersion);
+    log("[素材] 本地图片将在正式提交前上传；Veo 图片转换为 Base64。dry-run 不上传素材。");
     log("[余额] " + money(account.balance, account.currency));
     if (estimatedCost != null) {
-      const formula = model.price.unit === "second" ? payload.duration + " 秒 × " + priceLabel(model.price) : "1 次 × " + priceLabel(model.price);
+      const formula = requestPrice.unit === "second" ? payload.duration + " 秒 × " + priceLabel(requestPrice) : "1 次 × " + priceLabel(requestPrice);
       log("[估算] " + formula + " = " + money(estimatedCost, model.price.currency));
     }
+    if (estimatedCost == null) log("[阻止提交] 无法可靠解析当前价格表达式，需要更新价格适配后才可生成。");
     return;
   }
+  if (estimatedCost == null) die("无法可靠估算当前价格表达式，未上传素材或提交视频。请更新价格适配后重试。");
   const runFile = join(dir, "run.json");
   if (existsSync(runFile)) {
     const prev = JSON.parse(readFileSync(runFile, "utf8"));
+    if (!prev.taskId) die("此目录存在提交记录但未取得任务 ID，可能已被接收；请核对站点任务记录，禁止盲目重复提交。");
     die("输出目录已有任务 " + prev.taskId + "（防重复提交）。续查:\n  node studio.mjs status --task " + prev.taskId + ' --wait --out "' + dir + '"\n或换一个 --out 目录。');
   }
-  const frameNote = payload.content ? (payload.content.some(c => c.role === "first_frame") ? ", first_frame" : "") + (payload.content.some(c => c.role === "last_frame") ? ", last_frame" : "") : "";
+  payload = await prepareVideoMedia(cfg, payload, adapter);
+  const frameNote = (args["first-frame"] ? ", first_frame" : "") + (args["last-frame"] ? ", last_frame" : "");
   const identityNote = identitySources.length ? ", identity=authorized-direct" : "";
   const audioMode = payload.generate_audio == null ? "model-default" : String(payload.generate_audio);
   const geometry = payload.size || payload.ratio || payload.resolution || "model-default";
   log("[submit] POST " + createEndpoint + " · " + model.id + " (" + payload.duration + "s, " + geometry + ", audio=" + audioMode + frameNote + identityNote + ")");
   log("[reference] images=" + referenceAudit.imageCount + " · identity=" + referenceAudit.identityImageCount + " · video=" + referenceAudit.videoReferenceCount + " · audio=" + referenceAudit.audioReferenceCount);
-  log("[price] " + priceLabel(model.price) + (estimatedCost != null ? " · 本次估算 " + money(estimatedCost, model.price.currency) : "") + " · 当前余额 " + money(account.balance, account.currency));
-  const task = await api(cfg, "POST", createEndpoint, payload);
+  log("[price] " + priceLabel(requestPrice) + " · 本次估算 " + money(estimatedCost, model.price.currency) + " · 当前余额 " + money(account.balance, account.currency));
+  const submission = { submittedAt: new Date().toISOString(), catalogAudit, estimatedCost, identityAudit, referenceAudit, payload: sanitizePayload(payload), submissionState: "submitting" };
+  writeFileSync(runFile, JSON.stringify(submission, null, 2), { flag: "wx" });
+  let task;
+  try { task = await api(cfg, "POST", createEndpoint, payload); }
+  catch (error) {
+    writeFileSync(runFile, JSON.stringify({ ...submission, submissionState: "unconfirmed", error: error.message }, null, 2));
+    throw new Error(error.message + "；提交记录已保存。结果未确认，核对站点任务记录后再处理，禁止盲目重交。");
+  }
   const taskId = task.id || task.task_id;
   if (!taskId) die("提交响应中无任务 ID: " + JSON.stringify(task).slice(0, 400));
-  writeFileSync(runFile, JSON.stringify({ taskId, submittedAt: new Date().toISOString(), catalogAudit, estimatedCost, identityAudit, referenceAudit, payload: sanitizePayload(payload) }, null, 2));
+  writeFileSync(runFile, JSON.stringify({ ...submission, taskId, submissionState: "accepted" }, null, 2));
   log("[task] " + taskId + " (status=" + task.status + ")");
   if (args["no-wait"]) { log("稍后查询: node studio.mjs status --task " + taskId + ' --wait --out "' + dir + '"'); return; }
   await pollTask(cfg, taskId, dir, adapter);
@@ -1561,6 +1685,7 @@ async function main(argv = process.argv.slice(2)) {
     "          [--first-frame 图] [--last-frame 图]（图生视频：片头随首帧/片尾随尾帧）",
     "          [--identity-image 授权真人图] [--image 场景/产品图 ...合计最多30] [--video-url URL] [--audio-url URL]",
     "          [--require-image] [--audio|--no-audio] [--seed N] [--out 目录] [--no-wait] [--dry-run]",
+    "          [--resolution 720p|1080p]（仅可变分辨率型号）[--video-mode frames|reference]（Veo）[--negative-prompt 文本]",
     "  查任务: node studio.mjs status --task task_xxx [--wait] [--out 目录]",
     '  生图:  node studio.mjs image --prompt "..." [--prompt "..." ...] [--aspect 16:9] [--n 1-4] [--concurrency 1-10] [--model gpt-image-2-4k] [--identity-ref 授权真人图] [--ref 场景/产品图 ...] [--dry-run]',
     "          多张并发：重复 --prompt 出多张不同图，或 --n 每个提示词出几张；总量 = 提示词数 × n，用并发池并行跑（默认并发 3、上限 10）",
@@ -1576,4 +1701,4 @@ async function main(argv = process.argv.slice(2)) {
 const invokedAsScript = process.argv[1] && resolve(process.argv[1]).toLowerCase() === resolve(SCRIPT_PATH).toLowerCase();
 if (invokedAsScript) main().catch(e => { console.error("[ERROR] " + (e && e.message ? e.message : String(e))); process.exitCode = 1; });
 
-export { ONBOARDING_LINES, VIDEO_MODEL_ADAPTERS, explicitVideoAdapter, inferVideoCapabilities, normalizeVideoPrice, isVideoCatalogRow, endpointCompatible, promptRequiresImageReference, buildVideoPayload, buildReferenceAudit, monitorStartMessage, monitorHeartbeatMessage, fetchVideoCatalog, fetchAccount, runPreflight, money, priceLabel };
+export { ONBOARDING_LINES, VIDEO_MODEL_ADAPTERS, explicitVideoAdapter, inferVideoCapabilities, normalizeVideoPrice, isVideoCatalogRow, endpointCompatible, promptRequiresImageReference, buildVideoPayload, buildReferenceAudit, monitorStartMessage, monitorHeartbeatMessage, fetchVideoCatalog, fetchAccount, runPreflight, money, priceLabel, prepareVideoMedia, pollTask, cmdVideo };

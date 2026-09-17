@@ -269,7 +269,9 @@ test("keeps live 88API Veo model names while applying the Veo payload schema", (
     size: "1080x1920",
   });
   assert.throws(() => buildVideoPayload({}, { prompt: "test", duration: "10", ratio: "16:9" }, model), /最长时长为 8 秒/);
-  assert.throws(() => buildVideoPayload({}, { prompt: "test", "first-frame": "frame.png" }, model), /明确不支持首尾帧/);
+  const frames = buildVideoPayload({}, { prompt: "test", duration: "6", "first-frame": "https://example.com/frame.png" }, model);
+  assert.equal(frames.metadata.video_mode, "frames");
+  assert.equal(frames.duration, 6);
 });
 
 test("builds a payload from the user-selected model profile", () => {
@@ -290,7 +292,8 @@ test("builds a payload from the user-selected model profile", () => {
   const payload = buildVideoPayload({}, { prompt: "test", ratio: "16:9" }, model);
   assert.equal(payload.model, model.id);
   assert.equal(payload.duration, 5);
-  assert.equal(payload.resolution, "1080p");
+  assert.equal(payload.size, "16:9");
+  assert.equal(payload.resolution, undefined); // The sales model locks output resolution.
 });
 
 test("blocks paid video submission when a required reference image is missing", (t) => {
@@ -320,7 +323,7 @@ test("blocks paid video submission when a required reference image is missing", 
   writeFileSync(imagePath, Buffer.from("89504E470D0A1A0A0000000D49484452", "hex"));
   const payload = buildVideoPayload({}, { prompt: "product video", image: imagePath, "require-image": true }, model);
   assert.equal(payload.images.length, 1);
-  assert.match(payload.images[0], /^data:image\/png;base64,/);
+  assert.deepEqual(payload.images[0], { localImage: imagePath });
 });
 
 test("monitor messages tell the user that the Agent is still watching progress", () => {

@@ -57,7 +57,7 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" <参数>
 ## 人物身份路由（出片前强制判定）
 
 - **复刻原片演员 / 权利不明确**：只迁移气质、年龄感和造型逻辑，生成新身份锚定图；绝不抽取原片人物脸或把原片截图作为身份参考。
-- **用户另行提供人物照片并明确说“用这个人”**：视为授权真人身份分支。原照片必须成为**唯一身份权威**，登记进 `assets/manifest.json`，生成每张关键帧时都直接加 `image --identity-ref <原照片>`，生成视频时必须加 `video --identity-image <原照片>`。AI 首尾帧只控制场景、服装、构图和状态，不得取代身份。
+- **用户另行提供人物照片并明确说“用这个人”**：视为授权真人身份分支。原照片必须成为**唯一身份权威**，登记进 `assets/manifest.json`，生成每张关键帧时都直接加 `image --identity-ref <原照片>`，生成视频时必须加 `video --identity-image <原照片>`。AI 关键帧只控制场景、服装、构图和状态，不得取代身份。模型首尾帧模式与普通参考素材互斥时，保留原身份图，改为普通参考图模式，不得丢弃原图或强行混用。
 - 授权真人分支禁止“原照片 → AI 锚定图 → 再以 AI 锚定图生其它脸图”的身份链。每张含脸关键帧都直接参考原照片；可额外参考上一帧保持场景，但上一帧不能成为身份唯一来源。
 - 视频提交前先 `--dry-run`，必须看到 `[IDENTITY-AUDIT]` 的 `mode:"authorized-direct"` 且 `sources` 含原照片；缺失则停止，不得付费生成。
 
@@ -122,7 +122,7 @@ node "<PLUGIN_ROOT>/scripts/studio.mjs" status --task <任务ID> --wait --out "<
 
 授权真人出片使用 `--identity-image <原照片>`；场景/产品/风格图仍用 `--image`。CLI 会把身份图放在普通参考图第一位、自动注入身份唯一基准，并在 dry-run 与 `run.json` 写入身份审计。
 
-> **参考素材能力按模型目录执行。** 只有目录声明支持时才可用 `--video-url` 迁移运镜、`--audio-url` 卡节奏、`--first-frame` / `--last-frame` 控制首尾帧。视频/音频必须公网 URL；数量上限从实时能力说明读取。提示词需逐条声明每个素材只负责哪一维，见 [references/references.md](references/references.md)。
+> **参考素材能力按模型目录执行。** 只有目录声明支持时才可用 `--video-url` 迁移运镜、`--audio-url` 卡节奏、`--first-frame` / `--last-frame` 控制首尾帧。视频/音频必须匿名可下载的公网 HTTPS URL；数量上限从实时能力说明读取。本地图片由 CLI 正式提交前上传（Veo 转 Base64），dry-run 不上传。提示词需逐条声明每个素材只负责哪一维，见 [references/references.md](references/references.md)。
 8. **持续监控。** `status --wait` 会定期输出进度心跳；即使状态未变化，也要让用户看到“Agent仍在监控”。持续等待到 completed/failed，不得把长时间无变化误报为卡死，也不得重复提交。
 9. **交付。** 报告实际模型、价格版本、参考图审计、估算与实际用量、成片路径。失败时读 troubleshooting.md 诊断，**修完原因才允许重交**。
 
@@ -167,15 +167,17 @@ FF 的位置：**ffprobe 只做①，ffmpeg 做②抽帧与③的上色/合成/�
 
 ## 模型能力边界
 
-不要把一个模型的能力或请求体套到其它模型。插件先以 `/api/pricing`、`/api/user/models` 和 `/v1/models` 的交集确定**88API现网公开模型名**，再由模型适配器确定创建端点、状态端点和参数结构；没有专用适配器时才使用实时目录的 `supported_endpoint_types` 选择统一视频端点。不得根据过期文档或上游内部名称自行改写付费请求的 `model`。
+不要把一个模型的能力或请求体套到其它模型。插件以 `/api/pricing`、`/api/user/models` 和 `/v1/models` 的交集确定 **88API 现网公开模型名**，并按[当前 API 契约](references/api.md)构造请求。NewAPI 内部虽改为任务插件，对外仍使用 `POST /v1/videos` → 公开 `id` → `GET /v1/videos/{id}`，不能改用内部插件或上游模型名。
 
-- Veo 使用88API现网公开模型名 `veo-3.1` / `veo-3.1-fast`，不得替换成文档或上游内部名称；
-- Veo 固定 8 秒、1080p，使用 `size`，最多 2 张图片，不接受首尾帧、参考视频或参考音频；
-- MiniMax H3 只使用现网名称 `minimax-h3-1440p` / `minimax-h3-768p`，不得回退到旧名 `minimax-h3`。
+- 目录里任务模型可能仍只标 `openai`。已核实型号或有视频分组及按秒任务 schema 的模型不能再因此被标成“不兼容”；普通聊天模型不得误判为视频。
+- 普通请求使用 `size`、`images`、`metadata.referenceVideos/referenceAudios/firstFrame/lastFrame`，不沿用旧 `content[]` 或顶层 `ratio`。
+- Veo 使用 `veo-3.1` / `veo-3.1-fast`；4/6/8 秒、720p/1080p。`reference` 有参考图时固定 8 秒；`frames` 最多 2 张；无参考视频/音频。由 CLI 处理图片 Base64 和专用字段。
+- Grok 最多一张首图；Gemini Omni 的参考视频使用顶层 `video`；带分辨率的销售型号不可覆盖分辨率。
+- 首尾帧与普通素材的互斥、SD2.0 总素材上限和音频开关能力均由 CLI 前置校验，不得为了提交成功静默去掉素材。
+- `tiered_expr` 按秒表达式及分辨率分支纳入价格估算，并应用目录分组倍率。无法解析的新表达式必须明确显示未知，阻止付费提交，不能当成 Token 价格或零价格。
+- 已提交但未拿到 ID 的请求可能已经计费，禁止直接换目录重交；先核对站点任务记录。`status --wait` 遇到瞬时查询错误会继续查询同一个 ID。
 
-目录未声明且插件没有专用适配器的能力不得承诺。目录可见不等于上游容量永远健康：`available` 表示目录、账户和当前 API Key 三层检查通过，不代表付费提交时绝不会遇到临时熔断。
-
-只有用户选择 Seedance 2.5 时，才加载 [references/ark-native.md](references/ark-native.md) 并应用其中已验证的首尾帧、多模态参考和即梦网页降级边界；其它模型只按实时目录说明与实际返回处理。
+目录可见不等于上游容量永远健康：`available` 表示目录、账户和当前 API Key 三层检查通过，不代表所有服务路径有相同参考能力，也不代表不会发生临时熔断。Ark 原生文档仅作能力背景；付费请求一律以当前 88API 契约和 CLI 校验为准。
 
 ## 输出契约
 
